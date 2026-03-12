@@ -12,10 +12,10 @@ from google.genai import types
 
 
 # =========================
-# CẤU HÌNH CHUNG
+# CẤU HÌNH
 # =========================
 st.set_page_config(
-    page_title="Đình Thái - SRT Translator Pro V7.2",
+    page_title="Đình Thái - SRT Translator Studio",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -28,22 +28,36 @@ RETRY_SLEEP_SECONDS = 0.45
 MAX_FILE_WORKERS = 3
 
 BASE_SYSTEM_PROMPT = """
-Bạn là chuyên gia dịch phụ đề phim từ mọi ngôn ngữ sang tiếng Việt.
+Bạn là chuyên gia dịch phụ đề phim sang tiếng Việt.
 
 YÊU CẦU CHUNG:
-- Tự động phát hiện ngôn ngữ của từng dòng phụ đề trước khi dịch nếu người dùng chọn chế độ tự động.
-- Nguồn có thể là bất kỳ ngôn ngữ nào: Trung, Anh, Hàn, Nhật, Thái, Pháp, Đức, Nga, Tây Ban Nha, Bồ Đào Nha, Ả Rập... hoặc văn bản đa ngôn ngữ.
-- Dịch toàn bộ nội dung sang tiếng Việt tự nhiên, mượt, đúng ngữ cảnh hội thoại.
+- Dịch tự nhiên, mượt, đúng ngữ cảnh hội thoại.
+- Nếu người dùng chọn chế độ tự động thì tự phát hiện ngôn ngữ của từng dòng trước khi dịch.
+- Nguồn có thể là một hoặc nhiều ngôn ngữ khác nhau.
 - Giữ văn phong giống phụ đề phim, dễ đọc, gọn.
 - Không giải thích, không ghi chú.
-- Không ghi ra tên ngôn ngữ phát hiện được.
-- Không đánh số lại.
 - Không bỏ dòng nào.
+- Không đánh số lại.
 - Mỗi mục phụ đề đầu vào phải trả về đúng 1 dòng đầu ra tương ứng.
 - Nếu gặp tên riêng thì xử lý hợp lý theo ngữ cảnh.
-- Nếu dòng đã là tiếng Việt chuẩn thì giữ nguyên hoặc chỉ chỉnh nhẹ cho tự nhiên hơn.
+- Nếu dòng đã là tiếng Việt chuẩn thì giữ nguyên hoặc chỉnh nhẹ cho tự nhiên hơn.
 - Không thêm ký tự thừa.
 """.strip()
+
+SOURCE_LANGUAGE_OPTIONS = [
+    "Tự động",
+    "Tiếng Trung",
+    "Tiếng Anh",
+    "Tiếng Nhật",
+    "Tiếng Hàn",
+    "Tiếng Thái",
+    "Tiếng Pháp",
+    "Tiếng Đức",
+    "Tiếng Nga",
+    "Tiếng Tây Ban Nha",
+    "Tiếng Bồ Đào Nha",
+    "Tiếng Ả Rập",
+]
 
 LANGUAGE_LABELS = {
     "zh": "Tiếng Trung",
@@ -61,59 +75,157 @@ LANGUAGE_LABELS = {
     "unknown": "Không xác định",
 }
 
-SOURCE_LANGUAGE_OPTIONS = [
-    "Tự động",
-    "Tiếng Trung",
-    "Tiếng Anh",
-    "Tiếng Nhật",
-    "Tiếng Hàn",
-    "Tiếng Thái",
-    "Tiếng Pháp",
-    "Tiếng Đức",
-    "Tiếng Nga",
-    "Tiếng Tây Ban Nha",
-    "Tiếng Bồ Đào Nha",
-    "Tiếng Ả Rập",
-]
-
 CUSTOM_CSS = """
 <style>
-.block-container {max-width: 1440px; padding-top: .8rem; padding-bottom: 1.2rem;}
+.block-container {max-width: 1450px; padding-top: .8rem; padding-bottom: 1.2rem;}
 html, body, [class*="css"] {font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;}
 [data-testid="stAppViewContainer"] {background: linear-gradient(180deg, #f7f8fb 0%, #eef2f7 100%);}
 [data-testid="stHeader"] {background: rgba(0,0,0,0);}
-.topbar {display:flex;justify-content:space-between;align-items:center;background:rgba(255,255,255,.82);backdrop-filter: blur(12px);border:1px solid rgba(15,23,42,.06);box-shadow:0 10px 30px rgba(15,23,42,.06);border-radius:22px;padding:16px 18px;margin-bottom:18px;}
-.brand-wrap {display:flex;align-items:center;gap:14px;}
-.brand-icon {width:44px;height:44px;border-radius:14px;background:linear-gradient(135deg,#2563eb 0%,#60a5fa 100%);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;box-shadow:0 10px 25px rgba(37,99,235,.25);}
-.brand-title {font-size:1.95rem;line-height:1;font-weight:900;color:#0f172a;}
-.brand-sub {color:#64748b;letter-spacing:.16em;text-transform:uppercase;font-size:.82rem;margin-top:4px;}
-.version-pill {border:1px solid rgba(15,23,42,.08);background:#fff;color:#475569;border-radius:999px;padding:8px 14px;font-size:.82rem;font-weight:700;}
-.card {background:rgba(255,255,255,.9);border:1px solid rgba(15,23,42,.06);border-radius:24px;padding:18px 18px 14px 18px;margin-bottom:18px;box-shadow:0 10px 30px rgba(15,23,42,.06);}
-.card-title {color:#0f172a;font-size:1.06rem;font-weight:800;margin-bottom:12px;}
-.card-note {color:#64748b;font-size:.92rem;}
-.metric-card {background:#fff;border:1px solid rgba(15,23,42,.06);border-radius:18px;padding:14px;}
-.metric-label {color:#64748b;font-size:.84rem;}
-.metric-value {color:#0f172a;font-size:1.42rem;font-weight:900;margin-top:4px;}
-.metric-sub {color:#94a3b8;font-size:.8rem;margin-top:3px;}
-.stTextInput > div > div > input, .stNumberInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div {background:#fff !important;color:#0f172a !important;border:1px solid #dbe2ea !important;border-radius:14px !important;}
-.stButton > button {border-radius:16px !important;min-height:52px !important;font-weight:800 !important;border:1px solid rgba(15,23,42,.08) !important;}
-.stButton > button[kind="primary"] {background:linear-gradient(90deg,#2563eb 0%,#3b82f6 100%) !important;color:white !important;box-shadow:0 12px 24px rgba(37,99,235,.2);}
-.stDownloadButton > button {border-radius:16px !important;min-height:52px !important;font-weight:800 !important;background:linear-gradient(90deg,#16a34a 0%,#22c55e 100%) !important;color:white !important;border:none !important;}
+
+.topbar {
+    display:flex; justify-content:space-between; align-items:center;
+    background:rgba(255,255,255,.86); backdrop-filter: blur(12px);
+    border:1px solid rgba(15,23,42,.06); box-shadow:0 10px 30px rgba(15,23,42,.06);
+    border-radius:24px; padding:16px 18px; margin-bottom:18px;
+}
+.brand-wrap {display:flex; align-items:center; gap:14px;}
+.brand-icon {
+    width:46px; height:46px; border-radius:14px;
+    background:linear-gradient(135deg,#2563eb 0%,#60a5fa 100%);
+    color:#fff; display:flex; align-items:center; justify-content:center;
+    font-weight:900; box-shadow:0 10px 25px rgba(37,99,235,.25);
+}
+.brand-title {font-size:1.95rem; line-height:1; font-weight:900; color:#0f172a;}
+.brand-sub {color:#64748b; letter-spacing:.16em; text-transform:uppercase; font-size:.82rem; margin-top:4px;}
+.version-pill {
+    border:1px solid rgba(15,23,42,.08); background:#fff; color:#475569;
+    border-radius:999px; padding:8px 14px; font-size:.82rem; font-weight:700;
+}
+
+.card {
+    background:rgba(255,255,255,.92); border:1px solid rgba(15,23,42,.06);
+    border-radius:24px; padding:18px 18px 14px 18px; margin-bottom:18px;
+    box-shadow:0 10px 30px rgba(15,23,42,.06);
+}
+.card-title {color:#0f172a; font-size:1.06rem; font-weight:800; margin-bottom:12px;}
+.card-note {color:#64748b; font-size:.92rem;}
+
+.metric-card {
+    background:#fff; border:1px solid rgba(15,23,42,.06);
+    border-radius:18px; padding:14px;
+}
+.metric-label {color:#64748b; font-size:.84rem;}
+.metric-value {color:#0f172a; font-size:1.42rem; font-weight:900; margin-top:4px;}
+.metric-sub {color:#94a3b8; font-size:.8rem; margin-top:3px;}
+
+.stTextInput > div > div > input,
+.stNumberInput input,
+.stTextArea textarea,
+.stSelectbox div[data-baseweb="select"] > div {
+    background:#fff !important; color:#0f172a !important;
+    border:1px solid #dbe2ea !important; border-radius:14px !important;
+}
+
+.stButton > button {
+    border-radius:16px !important; min-height:52px !important;
+    font-weight:800 !important; border:1px solid rgba(15,23,42,.08) !important;
+}
+.stButton > button[kind="primary"] {
+    background:linear-gradient(90deg,#2563eb 0%,#3b82f6 100%) !important;
+    color:white !important; box-shadow:0 12px 24px rgba(37,99,235,.2);
+}
+.stDownloadButton > button {
+    border-radius:16px !important; min-height:52px !important; font-weight:800 !important;
+    background:linear-gradient(90deg,#16a34a 0%,#22c55e 100%) !important;
+    color:white !important; border:none !important;
+}
+
 [data-testid="stProgressBar"] > div {background:#e2e8f0 !important;}
-[data-testid="stProgressBar"] div div div {background:linear-gradient(90deg,#16a34a 0%,#22c55e 100%) !important;}
-div[data-testid="stFileUploaderDropzone"] {background:#f8fafc;border:2px dashed #cbd5e1;border-radius:20px;}
-.status-ok {background:#ecfdf5;border:1px solid #bbf7d0;color:#166534;border-radius:14px;padding:12px 14px;margin-top:8px;}
-.status-warn {background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:14px;padding:12px 14px;margin-top:8px;}
-.file-row {padding:10px 12px; border:1px solid rgba(15,23,42,.06); border-radius:14px; background:#fff; margin-bottom:8px;}
-.small {color:#64748b;font-size:.88rem;}
-.key-box {border-radius:14px;padding:12px 14px;margin-bottom:10px;border:1px solid rgba(15,23,42,.08);background:#fff;}
-.key-row {display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}
-.key-name {font-weight:700;color:#0f172a;font-size:.95rem;word-break:break-all;}
-.key-status {padding:6px 10px;border-radius:999px;font-size:.8rem;font-weight:800;}
-.key-green {background:#ecfdf5;color:#166534;border:1px solid #bbf7d0;}
-.key-red {background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
-.key-yellow {background:#fffbeb;color:#92400e;border:1px solid #fde68a;}
-.key-detail {margin-top:8px;font-size:.84rem;color:#64748b;white-space:pre-wrap;word-break:break-word;}
+[data-testid="stProgressBar"] div div div {
+    background:linear-gradient(90deg,#16a34a 0%,#22c55e 100%) !important;
+}
+div[data-testid="stFileUploaderDropzone"] {
+    background:#f8fafc; border:2px dashed #cbd5e1; border-radius:20px;
+}
+
+.status-ok {
+    background:#ecfdf5; border:1px solid #bbf7d0; color:#166534;
+    border-radius:14px; padding:12px 14px; margin-top:8px;
+}
+.status-warn {
+    background:#fff7ed; border:1px solid #fed7aa; color:#9a3412;
+    border-radius:14px; padding:12px 14px; margin-top:8px;
+}
+.small {color:#64748b; font-size:.88rem;}
+
+.key-box {
+    border-radius:14px; padding:12px 14px; margin-bottom:10px;
+    border:1px solid rgba(15,23,42,.08); background:#fff;
+}
+.key-row {
+    display:flex; justify-content:space-between; align-items:center;
+    gap:12px; flex-wrap:wrap;
+}
+.key-name {font-weight:700; color:#0f172a; font-size:.95rem; word-break:break-all;}
+.key-status {padding:6px 10px; border-radius:999px; font-size:.8rem; font-weight:800;}
+.key-green {background:#ecfdf5; color:#166534; border:1px solid #bbf7d0;}
+.key-red {background:#fef2f2; color:#991b1b; border:1px solid #fecaca;}
+.key-yellow {background:#fffbeb; color:#92400e; border:1px solid #fde68a;}
+.key-detail {margin-top:8px; font-size:.84rem; color:#64748b; white-space:pre-wrap; word-break:break-word;}
+
+.done-popup {
+    position: fixed;
+    right: 24px;
+    bottom: 24px;
+    width: 360px;
+    max-width: calc(100vw - 32px);
+    background: rgba(255,255,255,.98);
+    border: 1px solid rgba(15,23,42,.08);
+    box-shadow: 0 18px 40px rgba(15,23,42,.16);
+    border-radius: 22px;
+    z-index: 99999;
+    overflow: hidden;
+}
+.done-popup-head {
+    display:flex;
+    align-items:center;
+    justify-content:space-between;
+    padding:14px 16px 0 16px;
+}
+.done-popup-close button {
+    min-height:38px !important;
+    height:38px !important;
+    border-radius:999px !important;
+    padding:0 14px !important;
+}
+.done-popup-body {
+    padding: 6px 16px 16px 16px;
+}
+.done-check {
+    width: 56px;
+    height: 56px;
+    border-radius: 999px;
+    background: linear-gradient(135deg,#16a34a 0%,#22c55e 100%);
+    color: white;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    font-size: 30px;
+    font-weight: 900;
+    box-shadow: 0 12px 24px rgba(34,197,94,.28);
+    margin-bottom: 12px;
+}
+.done-title {
+    font-size: 1.16rem;
+    font-weight: 900;
+    color: #0f172a;
+    margin-bottom: 6px;
+}
+.done-text {
+    color: #64748b;
+    font-size: .95rem;
+    line-height: 1.5;
+}
 </style>
 """
 
@@ -126,6 +238,9 @@ class SubtitleItem:
     translated_text: str = ""
 
 
+# =========================
+# XỬ LÝ SRT
+# =========================
 def read_srt_content(content: str) -> List[SubtitleItem]:
     content = content.strip()
     if not content:
@@ -142,7 +257,6 @@ def read_srt_content(content: str) -> List[SubtitleItem]:
         index = lines[0].strip()
         timecode = lines[1].strip()
         text = "\n".join(line.rstrip() for line in lines[2:]).strip()
-
         items.append(SubtitleItem(index=index, timecode=timecode, text=text))
 
     return items
@@ -202,7 +316,6 @@ def detect_dominant_language(items: List[SubtitleItem], sample_size: int = 80) -
         text = (item.text or "").strip()
         if not text:
             continue
-
         lang = detect_language(text)
         counts[lang] = counts.get(lang, 0) + 1
         checked += 1
@@ -245,13 +358,13 @@ def merge_partial_translation(source_items: List[SubtitleItem], partial_items: L
 
 
 def build_batches(items: List[SubtitleItem], batch_size: int) -> List[List[SubtitleItem]]:
-    pending = [
-        item for item in items
-        if not item.translated_text.strip() and is_meaningful_text(item.text)
-    ]
+    pending = [item for item in items if not item.translated_text.strip() and is_meaningful_text(item.text)]
     return [pending[i:i + batch_size] for i in range(0, len(pending), batch_size)]
 
 
+# =========================
+# API KEY / GEMINI
+# =========================
 def create_client(api_key: str):
     return genai.Client(api_key=api_key.strip())
 
@@ -461,6 +574,9 @@ def collect_api_keys_and_slots(keys_raw: str, batches_raw: str) -> Tuple[List[st
     return api_keys, worker_slots
 
 
+# =========================
+# XỬ LÝ FILE
+# =========================
 def process_one_file(
     file_name: str,
     source_bytes: bytes,
@@ -626,6 +742,9 @@ def build_partial_map(partial_upload) -> Dict[str, bytes]:
     return result
 
 
+# =========================
+# SESSION STATE
+# =========================
 def init_state():
     defaults = {
         "zip_bytes": b"",
@@ -638,6 +757,7 @@ def init_state():
         "had_error": False,
         "detected_lang_text": "Chưa phát hiện",
         "api_test_results": [],
+        "show_done_popup": False,
         "stats": {
             "files": 0,
             "total": 0,
@@ -654,6 +774,22 @@ def init_state():
             st.session_state[k] = v
 
 
+def reset_run_state():
+    st.session_state["zip_bytes"] = b""
+    st.session_state["single_bytes"] = b""
+    st.session_state["result_ready"] = False
+    st.session_state["run_logs"] = []
+    st.session_state["last_preview_src"] = ""
+    st.session_state["last_preview_dst"] = ""
+    st.session_state["finished"] = False
+    st.session_state["had_error"] = False
+    st.session_state["detected_lang_text"] = "Chưa phát hiện"
+    st.session_state["show_done_popup"] = False
+    st.session_state["stats"] = {"files": 0, "total": 0, "skip": 0, "need": 0, "done": 0, "failed_batches": 0}
+    st.session_state["speed_text"] = "0 dòng/s"
+    st.session_state["progress_percent"] = 0
+
+
 # =========================
 # UI
 # =========================
@@ -664,28 +800,21 @@ st.markdown(
     '<div class="topbar">'
     '  <div class="brand-wrap">'
     '    <div class="brand-icon">DT</div>'
-    '    <div><div class="brand-title">Đình Thái</div><div class="brand-sub">SRT Translator Pro</div></div>'
+    '    <div><div class="brand-title">Đình Thái</div><div class="brand-sub">SRT Translator Studio</div></div>'
     '  </div>'
-    '  <div class="version-pill">V7.2 TEST KEY + AUTO DETECT</div>'
+    '  <div class="version-pill">V8 POPUP DONE</div>'
     '</div>',
     unsafe_allow_html=True,
 )
 
-left, right = st.columns([1.15, 1.55], gap="large")
+left, right = st.columns([1.12, 1.58], gap="large")
 
 with left:
     st.markdown('<div class="card"><div class="card-title">📤 Upload Nhiều File SRT</div>', unsafe_allow_html=True)
-    uploaded_files = st.file_uploader(
-        "Chọn 1 hoặc nhiều file .srt",
-        type=["srt"],
-        accept_multiple_files=True
-    )
-    partial_zip = st.file_uploader(
-        "File dịch dở (ZIP hoặc 1 SRT cùng tên để dịch tiếp)",
-        type=["zip", "srt"]
-    )
+    uploaded_files = st.file_uploader("Chọn 1 hoặc nhiều file .srt", type=["srt"], accept_multiple_files=True)
+    partial_zip = st.file_uploader("File dịch dở (ZIP hoặc 1 SRT cùng tên để dịch tiếp)", type=["zip", "srt"])
     st.markdown(
-        '<div class="card-note">Tool hỗ trợ nhiều file SRT cùng lúc, dịch sang tiếng Việt, nối tiếp file dịch dở và tự phát hiện ngôn ngữ khi cần.</div></div>',
+        '<div class="card-note">Tool hỗ trợ nhiều file SRT cùng lúc, tự phát hiện ngôn ngữ hoặc ép ngôn ngữ nguồn, nối tiếp file dịch dở và xuất ZIP kết quả.</div></div>',
         unsafe_allow_html=True
     )
 
@@ -693,27 +822,13 @@ with left:
     c1, c2, c3 = st.columns(3)
 
     with c1:
-        model_name = st.selectbox(
-            "MODEL",
-            options=["gemini-2.5-flash", "gemini-2.0-flash"],
-            index=0
-        )
+        model_name = st.selectbox("MODEL", options=["gemini-2.5-flash", "gemini-2.0-flash"], index=0)
 
     with c2:
-        batch_size = st.number_input(
-            "BATCH SIZE",
-            min_value=1,
-            max_value=200,
-            value=DEFAULT_BATCH_SIZE,
-            step=1
-        )
+        batch_size = st.number_input("BATCH SIZE", min_value=1, max_value=200, value=DEFAULT_BATCH_SIZE, step=1)
 
     with c3:
-        source_language = st.selectbox(
-            "NGÔN NGỮ NGUỒN",
-            options=SOURCE_LANGUAGE_OPTIONS,
-            index=0
-        )
+        source_language = st.selectbox("NGÔN NGỮ NGUỒN", options=SOURCE_LANGUAGE_OPTIONS, index=0)
 
     output_zip_name = st.text_input("TÊN FILE ZIP XUẤT", value="srt_translated_bundle.zip")
     st.markdown('</div>', unsafe_allow_html=True)
@@ -752,7 +867,7 @@ with left:
         clear_key_test_btn = st.button("♻️ Xóa kết quả test", use_container_width=True)
 
     st.markdown(
-        '<div class="card-note">Key xanh dùng được. Key đỏ bị lỗi hoặc hết quota. Nếu đã test, tool sẽ ưu tiên chỉ dùng key xanh khi dịch.</div>',
+        '<div class="card-note">Key xanh dùng được. Key đỏ là lỗi, invalid hoặc hết quota. Khi đã test, tool sẽ ưu tiên dùng key xanh.</div>',
         unsafe_allow_html=True
     )
 
@@ -783,6 +898,7 @@ with left:
 with right:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown('<div class="card-title">🚀 Điều Khiển</div>', unsafe_allow_html=True)
+
     progress_placeholder = st.empty()
     percent_placeholder = st.empty()
 
@@ -876,18 +992,7 @@ if test_key_btn:
 # CLEAR
 # =========================
 if clear_btn:
-    st.session_state["zip_bytes"] = b""
-    st.session_state["single_bytes"] = b""
-    st.session_state["result_ready"] = False
-    st.session_state["run_logs"] = []
-    st.session_state["last_preview_src"] = ""
-    st.session_state["last_preview_dst"] = ""
-    st.session_state["finished"] = False
-    st.session_state["had_error"] = False
-    st.session_state["detected_lang_text"] = "Chưa phát hiện"
-    st.session_state["stats"] = {"files": 0, "total": 0, "skip": 0, "need": 0, "done": 0, "failed_batches": 0}
-    st.session_state["speed_text"] = "0 dòng/s"
-    st.session_state["progress_percent"] = 0
+    reset_run_state()
     st.rerun()
 
 
@@ -895,18 +1000,7 @@ if clear_btn:
 # RUN
 # =========================
 if run_btn:
-    st.session_state["zip_bytes"] = b""
-    st.session_state["single_bytes"] = b""
-    st.session_state["result_ready"] = False
-    st.session_state["run_logs"] = []
-    st.session_state["last_preview_src"] = ""
-    st.session_state["last_preview_dst"] = ""
-    st.session_state["finished"] = False
-    st.session_state["had_error"] = False
-    st.session_state["detected_lang_text"] = "Chưa phát hiện"
-    st.session_state["stats"] = {"files": 0, "total": 0, "skip": 0, "need": 0, "done": 0, "failed_batches": 0}
-    st.session_state["speed_text"] = "0 dòng/s"
-    st.session_state["progress_percent"] = 0
+    reset_run_state()
 
     if not uploaded_files:
         st.error("Bạn chưa upload file SRT nào.")
@@ -914,11 +1008,7 @@ if run_btn:
         api_keys, worker_slots = collect_api_keys_and_slots(keys_text, batch_text)
 
         if st.session_state["api_test_results"]:
-            ok_keys = {
-                item["key"].strip()
-                for item in st.session_state["api_test_results"]
-                if item.get("ok")
-            }
+            ok_keys = {item["key"].strip() for item in st.session_state["api_test_results"] if item.get("ok")}
             if ok_keys:
                 api_keys = [k for k in api_keys if k.strip() in ok_keys]
                 worker_slots = [k for k in worker_slots if k.strip() in ok_keys]
@@ -1014,13 +1104,14 @@ if run_btn:
 
             st.session_state["result_ready"] = True
             st.session_state["finished"] = True
+            st.session_state["show_done_popup"] = True
 
             if st.session_state["stats"]["failed_batches"] > 0:
                 st.session_state["had_error"] = True
 
 
 # =========================
-# RESULT
+# THÔNG BÁO KẾT QUẢ
 # =========================
 if st.session_state["finished"]:
     if st.session_state["had_error"]:
@@ -1051,3 +1142,33 @@ if st.session_state["result_ready"] and st.session_state["zip_bytes"]:
             mime="application/x-subrip",
             use_container_width=True,
         )
+
+
+# =========================
+# POPUP HOÀN THÀNH
+# =========================
+if st.session_state["show_done_popup"]:
+    popup_col1, popup_col2 = st.columns([10, 1])
+    with popup_col2:
+        if st.button("✕", key="close_done_popup"):
+            st.session_state["show_done_popup"] = False
+            st.rerun()
+
+    st.markdown(
+        f"""
+        <div class="done-popup">
+            <div class="done-popup-head"></div>
+            <div class="done-popup-body">
+                <div class="done-check">✓</div>
+                <div class="done-title">Đã dịch xong</div>
+                <div class="done-text">
+                    Toàn bộ quá trình dịch đã hoàn thành.<br>
+                    Số file: <b>{st.session_state["stats"]["files"]}</b><br>
+                    Tổng dòng đã xử lý: <b>{st.session_state["stats"]["done"]}</b><br>
+                    Batch lỗi: <b>{st.session_state["stats"]["failed_batches"]}</b>
+                </div>
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
