@@ -3,7 +3,7 @@ import re
 import time
 import zipfile
 from dataclasses import dataclass
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple, Optional, Any
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import streamlit as st
@@ -15,7 +15,7 @@ from google.genai import types
 # CẤU HÌNH CHUNG
 # =========================
 st.set_page_config(
-    page_title="Đình Thái - SRT Translator Pro V7.1",
+    page_title="Đình Thái - SRT Translator Pro V7.2",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -31,7 +31,7 @@ BASE_SYSTEM_PROMPT = """
 Bạn là chuyên gia dịch phụ đề phim từ mọi ngôn ngữ sang tiếng Việt.
 
 YÊU CẦU CHUNG:
-- Tự động phát hiện ngôn ngữ của từng dòng phụ đề trước khi dịch.
+- Tự động phát hiện ngôn ngữ của từng dòng phụ đề trước khi dịch nếu người dùng chọn chế độ tự động.
 - Nguồn có thể là bất kỳ ngôn ngữ nào: Trung, Anh, Hàn, Nhật, Thái, Pháp, Đức, Nga, Tây Ban Nha, Bồ Đào Nha, Ả Rập... hoặc văn bản đa ngôn ngữ.
 - Dịch toàn bộ nội dung sang tiếng Việt tự nhiên, mượt, đúng ngữ cảnh hội thoại.
 - Giữ văn phong giống phụ đề phim, dễ đọc, gọn.
@@ -44,6 +44,37 @@ YÊU CẦU CHUNG:
 - Nếu dòng đã là tiếng Việt chuẩn thì giữ nguyên hoặc chỉ chỉnh nhẹ cho tự nhiên hơn.
 - Không thêm ký tự thừa.
 """.strip()
+
+LANGUAGE_LABELS = {
+    "zh": "Tiếng Trung",
+    "ja": "Tiếng Nhật",
+    "ko": "Tiếng Hàn",
+    "th": "Tiếng Thái",
+    "ru": "Tiếng Nga",
+    "ar": "Tiếng Ả Rập",
+    "vi": "Tiếng Việt",
+    "es": "Tiếng Tây Ban Nha",
+    "fr": "Tiếng Pháp",
+    "de": "Tiếng Đức",
+    "pt": "Tiếng Bồ Đào Nha",
+    "en_or_latin": "Tiếng Anh / ngôn ngữ Latin",
+    "unknown": "Không xác định",
+}
+
+SOURCE_LANGUAGE_OPTIONS = [
+    "Tự động",
+    "Tiếng Trung",
+    "Tiếng Anh",
+    "Tiếng Nhật",
+    "Tiếng Hàn",
+    "Tiếng Thái",
+    "Tiếng Pháp",
+    "Tiếng Đức",
+    "Tiếng Nga",
+    "Tiếng Tây Ban Nha",
+    "Tiếng Bồ Đào Nha",
+    "Tiếng Ả Rập",
+]
 
 CUSTOM_CSS = """
 <style>
@@ -75,24 +106,16 @@ div[data-testid="stFileUploaderDropzone"] {background:#f8fafc;border:2px dashed 
 .status-warn {background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;border-radius:14px;padding:12px 14px;margin-top:8px;}
 .file-row {padding:10px 12px; border:1px solid rgba(15,23,42,.06); border-radius:14px; background:#fff; margin-bottom:8px;}
 .small {color:#64748b;font-size:.88rem;}
+.key-box {border-radius:14px;padding:12px 14px;margin-bottom:10px;border:1px solid rgba(15,23,42,.08);background:#fff;}
+.key-row {display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;}
+.key-name {font-weight:700;color:#0f172a;font-size:.95rem;word-break:break-all;}
+.key-status {padding:6px 10px;border-radius:999px;font-size:.8rem;font-weight:800;}
+.key-green {background:#ecfdf5;color:#166534;border:1px solid #bbf7d0;}
+.key-red {background:#fef2f2;color:#991b1b;border:1px solid #fecaca;}
+.key-yellow {background:#fffbeb;color:#92400e;border:1px solid #fde68a;}
+.key-detail {margin-top:8px;font-size:.84rem;color:#64748b;white-space:pre-wrap;word-break:break-word;}
 </style>
 """
-
-LANGUAGE_LABELS = {
-    "zh": "Tiếng Trung",
-    "ja": "Tiếng Nhật",
-    "ko": "Tiếng Hàn",
-    "th": "Tiếng Thái",
-    "ru": "Tiếng Nga",
-    "ar": "Tiếng Ả Rập",
-    "vi": "Tiếng Việt",
-    "es": "Tiếng Tây Ban Nha",
-    "fr": "Tiếng Pháp",
-    "de": "Tiếng Đức",
-    "pt": "Tiếng Bồ Đào Nha",
-    "en_or_latin": "Tiếng Anh / ngôn ngữ Latin",
-    "unknown": "Không xác định",
-}
 
 
 @dataclass
@@ -156,7 +179,6 @@ def detect_language(text: str) -> str:
     latin_letters = re.findall(r"[A-Za-z]", sample)
     if latin_letters:
         lower = sample.lower()
-
         if any(ch in lower for ch in ["¿", "¡", "ñ", "á", "é", "í", "ó", "ú"]):
             return "es"
         if any(ch in lower for ch in ["à", "â", "ç", "è", "é", "ê", "ë", "î", "ï", "ô", "ù", "û", "ü", "œ"]):
@@ -165,7 +187,6 @@ def detect_language(text: str) -> str:
             return "de"
         if any(ch in lower for ch in ["ã", "õ", "ç", "á", "é", "í", "ó", "ú", "â", "ê", "ô"]):
             return "pt"
-
         return "en_or_latin"
 
     return "unknown"
@@ -178,7 +199,6 @@ def detect_dominant_language(items: List[SubtitleItem], sample_size: int = 80) -
     for item in items:
         if checked >= sample_size:
             break
-
         text = (item.text or "").strip()
         if not text:
             continue
@@ -211,10 +231,7 @@ def prepare_items_from_source(items: List[SubtitleItem]) -> Tuple[List[SubtitleI
     return items, skipped
 
 
-def merge_partial_translation(
-    source_items: List[SubtitleItem],
-    partial_items: List[SubtitleItem]
-) -> Tuple[List[SubtitleItem], int]:
+def merge_partial_translation(source_items: List[SubtitleItem], partial_items: List[SubtitleItem]) -> Tuple[List[SubtitleItem], int]:
     merged = 0
     limit = min(len(source_items), len(partial_items))
 
@@ -239,24 +256,102 @@ def create_client(api_key: str):
     return genai.Client(api_key=api_key.strip())
 
 
-def build_prompt(batch: List[SubtitleItem], style_prompt: str) -> str:
+def mask_api_key(api_key: str) -> str:
+    api_key = (api_key or "").strip()
+    if len(api_key) <= 10:
+        return api_key
+    return f"{api_key[:6]}...{api_key[-4:]}"
+
+
+def test_single_api_key(api_key: str, model_name: str = DEFAULT_MODEL) -> Dict[str, Any]:
+    api_key = (api_key or "").strip()
+    if not api_key:
+        return {
+            "key": api_key,
+            "ok": False,
+            "status": "KEY RỖNG",
+            "color": "red",
+            "detail": "Không có nội dung."
+        }
+
+    try:
+        client = create_client(api_key)
+        response = client.models.generate_content(
+            model=model_name,
+            contents="Chỉ trả lời đúng từ OK",
+            config=types.GenerateContentConfig(temperature=0),
+        )
+        text = (response.text or "").strip().lower()
+
+        if text:
+            return {
+                "key": api_key,
+                "ok": True,
+                "status": "KEY OK",
+                "color": "green",
+                "detail": "Dùng được."
+            }
+
+        return {
+            "key": api_key,
+            "ok": False,
+            "status": "PHẢN HỒI RỖNG",
+            "color": "red",
+            "detail": "Model không trả dữ liệu."
+        }
+
+    except Exception as e:
+        err = str(e).lower()
+
+        if "quota" in err or "429" in err or "resource_exhausted" in err:
+            status = "LIMIT / HẾT QUOTA"
+        elif "api key not valid" in err or "invalid" in err or "permission" in err or "unauthenticated" in err:
+            status = "KEY KHÔNG HỢP LỆ"
+        elif "deadline" in err or "timeout" in err:
+            status = "TIMEOUT"
+        else:
+            status = "LỖI"
+
+        return {
+            "key": api_key,
+            "ok": False,
+            "status": status,
+            "color": "red",
+            "detail": str(e)
+        }
+
+
+def test_all_api_keys(api_keys: List[str], model_name: str) -> List[Dict[str, Any]]:
+    return [test_single_api_key(key, model_name) for key in api_keys]
+
+
+def build_prompt(batch: List[SubtitleItem], style_prompt: str, source_language: str) -> str:
     rows = []
     for i, item in enumerate(batch, start=1):
         rows.append(f"[{i}] {item.text.replace(chr(13), '').strip()}")
-
     joined_rows = "\n".join(rows)
 
     extra = ""
     if style_prompt.strip():
         extra = f"\nYÊU CẦU PHONG CÁCH DỊCH RIÊNG:\n{style_prompt.strip()}\n"
 
+    if source_language == "Tự động":
+        lang_instruction = (
+            "- Tự động phát hiện ngôn ngữ của từng dòng.\n"
+            "- Nếu file có nhiều ngôn ngữ khác nhau thì vẫn phải xử lý đúng từng dòng.\n"
+        )
+    else:
+        lang_instruction = (
+            f"- Xem toàn bộ nội dung đầu vào là {source_language}.\n"
+            f"- Ưu tiên dịch theo đặc điểm ngôn ngữ của {source_language}.\n"
+        )
+
     prompt = (
         f"{BASE_SYSTEM_PROMPT}\n"
         f"{extra}\n"
         "NHIỆM VỤ:\n"
-        "- Tự động phát hiện ngôn ngữ của từng dòng.\n"
+        f"{lang_instruction}"
         "- Dịch tất cả sang tiếng Việt.\n"
-        "- Nếu file có nhiều ngôn ngữ khác nhau thì vẫn phải xử lý đúng từng dòng.\n"
         "- Nếu một dòng đã là tiếng Việt thì giữ nguyên hoặc chỉnh nhẹ cho tự nhiên hơn.\n\n"
         "ĐỊNH DẠNG TRẢ VỀ:\n"
         "- Mỗi mục phải trả về đúng 1 dòng theo định dạng:\n"
@@ -291,10 +386,11 @@ def try_translate_batch_with_key(
     api_key: str,
     model_name: str,
     batch: List[SubtitleItem],
-    style_prompt: str
+    style_prompt: str,
+    source_language: str
 ) -> List[str]:
     client = create_client(api_key)
-    prompt = build_prompt(batch, style_prompt)
+    prompt = build_prompt(batch, style_prompt, source_language)
     last_error: Optional[Exception] = None
 
     for _ in range(MAX_RETRIES_PER_KEY):
@@ -302,9 +398,7 @@ def try_translate_batch_with_key(
             response = client.models.generate_content(
                 model=model_name,
                 contents=prompt,
-                config=types.GenerateContentConfig(
-                    temperature=0.2,
-                ),
+                config=types.GenerateContentConfig(temperature=0.2),
             )
             text = (response.text or "").strip()
             if not text:
@@ -324,12 +418,19 @@ def translate_batch_with_failover(
     batch: List[SubtitleItem],
     worker_slots: List[str],
     model_name: str,
-    style_prompt: str
+    style_prompt: str,
+    source_language: str
 ):
     last_error = ""
     for api_key in worker_slots:
         try:
-            translated = try_translate_batch_with_key(api_key, model_name, batch, style_prompt)
+            translated = try_translate_batch_with_key(
+                api_key,
+                model_name,
+                batch,
+                style_prompt,
+                source_language
+            )
             return batch_id, True, translated, ""
         except Exception as e:
             last_error = str(e)
@@ -343,7 +444,6 @@ def collect_api_keys_and_slots(keys_raw: str, batches_raw: str) -> Tuple[List[st
 
     api_keys = [line.strip() for line in raw_keys if line.strip()]
     batch_values = [line.strip() for line in raw_batches]
-
     worker_slots: List[str] = []
 
     for idx, key in enumerate(api_keys):
@@ -368,7 +468,8 @@ def process_one_file(
     worker_slots: List[str],
     model_name: str,
     style_prompt: str,
-    batch_size: int
+    batch_size: int,
+    source_language: str
 ):
     try:
         source_text = source_bytes.decode("utf-8-sig")
@@ -461,7 +562,8 @@ def process_one_file(
                     batch,
                     worker_slots,
                     model_name,
-                    style_prompt
+                    style_prompt,
+                    source_language
                 )
             )
 
@@ -507,33 +609,6 @@ def process_one_file(
     }
 
 
-def init_state():
-    defaults = {
-        "zip_bytes": b"",
-        "single_bytes": b"",
-        "result_ready": False,
-        "run_logs": [],
-        "last_preview_src": "",
-        "last_preview_dst": "",
-        "finished": False,
-        "had_error": False,
-        "detected_lang_text": "Chưa phát hiện",
-        "stats": {
-            "files": 0,
-            "total": 0,
-            "skip": 0,
-            "need": 0,
-            "done": 0,
-            "failed_batches": 0
-        },
-        "speed_text": "0 dòng/s",
-        "progress_percent": 0,
-    }
-    for k, v in defaults.items():
-        if k not in st.session_state:
-            st.session_state[k] = v
-
-
 def build_partial_map(partial_upload) -> Dict[str, bytes]:
     result: Dict[str, bytes] = {}
     if partial_upload is None:
@@ -551,6 +626,34 @@ def build_partial_map(partial_upload) -> Dict[str, bytes]:
     return result
 
 
+def init_state():
+    defaults = {
+        "zip_bytes": b"",
+        "single_bytes": b"",
+        "result_ready": False,
+        "run_logs": [],
+        "last_preview_src": "",
+        "last_preview_dst": "",
+        "finished": False,
+        "had_error": False,
+        "detected_lang_text": "Chưa phát hiện",
+        "api_test_results": [],
+        "stats": {
+            "files": 0,
+            "total": 0,
+            "skip": 0,
+            "need": 0,
+            "done": 0,
+            "failed_batches": 0
+        },
+        "speed_text": "0 dòng/s",
+        "progress_percent": 0,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
 # =========================
 # UI
 # =========================
@@ -563,12 +666,12 @@ st.markdown(
     '    <div class="brand-icon">DT</div>'
     '    <div><div class="brand-title">Đình Thái</div><div class="brand-sub">SRT Translator Pro</div></div>'
     '  </div>'
-    '  <div class="version-pill">V7.1 AUTO DETECT LANGUAGE</div>'
+    '  <div class="version-pill">V7.2 TEST KEY + AUTO DETECT</div>'
     '</div>',
     unsafe_allow_html=True,
 )
 
-left, right = st.columns([1.1, 1.55], gap="large")
+left, right = st.columns([1.15, 1.55], gap="large")
 
 with left:
     st.markdown('<div class="card"><div class="card-title">📤 Upload Nhiều File SRT</div>', unsafe_allow_html=True)
@@ -582,18 +685,20 @@ with left:
         type=["zip", "srt"]
     )
     st.markdown(
-        '<div class="card-note">Tool hỗ trợ nhiều file SRT cùng lúc, tự phát hiện ngôn ngữ và dịch sang tiếng Việt. Nếu có file dịch dở, tool sẽ nối tiếp phần còn lại.</div></div>',
+        '<div class="card-note">Tool hỗ trợ nhiều file SRT cùng lúc, dịch sang tiếng Việt, nối tiếp file dịch dở và tự phát hiện ngôn ngữ khi cần.</div></div>',
         unsafe_allow_html=True
     )
 
     st.markdown('<div class="card"><div class="card-title">⚙️ Cấu Hình Dịch</div>', unsafe_allow_html=True)
-    c1, c2 = st.columns(2)
+    c1, c2, c3 = st.columns(3)
+
     with c1:
         model_name = st.selectbox(
             "MODEL",
             options=["gemini-2.5-flash", "gemini-2.0-flash"],
             index=0
         )
+
     with c2:
         batch_size = st.number_input(
             "BATCH SIZE",
@@ -602,13 +707,21 @@ with left:
             value=DEFAULT_BATCH_SIZE,
             step=1
         )
+
+    with c3:
+        source_language = st.selectbox(
+            "NGÔN NGỮ NGUỒN",
+            options=SOURCE_LANGUAGE_OPTIONS,
+            index=0
+        )
+
     output_zip_name = st.text_input("TÊN FILE ZIP XUẤT", value="srt_translated_bundle.zip")
     st.markdown('</div>', unsafe_allow_html=True)
 
     st.markdown('<div class="card"><div class="card-title">✍️ Prompt Phong Cách Dịch</div>', unsafe_allow_html=True)
     style_prompt = st.text_area(
         "Prompt",
-        value="Dịch tự nhiên, mượt như phụ đề phim. Tự nhận diện ngôn ngữ nguồn, xưng hô phù hợp ngữ cảnh, ưu tiên câu ngắn gọn, dễ đọc.",
+        value="Dịch tự nhiên, mượt như phụ đề phim. Xưng hô phù hợp ngữ cảnh, ưu tiên câu ngắn gọn, dễ đọc.",
         height=130,
         label_visibility="collapsed"
     )
@@ -624,16 +737,48 @@ with left:
         height=150,
         label_visibility="collapsed"
     )
+
     batch_text = st.text_area(
         "Slots",
         value="2\n2\n2",
         height=92,
         help="Mỗi dòng là số slot tương ứng với từng API key"
     )
+
+    t1, t2 = st.columns([1, 1])
+    with t1:
+        test_key_btn = st.button("🧪 Test API Key", use_container_width=True)
+    with t2:
+        clear_key_test_btn = st.button("♻️ Xóa kết quả test", use_container_width=True)
+
     st.markdown(
-        '<div class="card-note">Nhiều key + nhiều slot = nhanh hơn. Tool sẽ xoay key khi một key lỗi.</div></div>',
+        '<div class="card-note">Key xanh dùng được. Key đỏ bị lỗi hoặc hết quota. Nếu đã test, tool sẽ ưu tiên chỉ dùng key xanh khi dịch.</div>',
         unsafe_allow_html=True
     )
+
+    if st.session_state["api_test_results"]:
+        st.markdown('<div style="margin-top:10px;"></div>', unsafe_allow_html=True)
+        for item in st.session_state["api_test_results"]:
+            color_class = "key-yellow"
+            if item["color"] == "green":
+                color_class = "key-green"
+            elif item["color"] == "red":
+                color_class = "key-red"
+
+            st.markdown(
+                f'''
+                <div class="key-box">
+                    <div class="key-row">
+                        <div class="key-name">{mask_api_key(item["key"])}</div>
+                        <div class="key-status {color_class}">{item["status"]}</div>
+                    </div>
+                    <div class="key-detail">{item["detail"]}</div>
+                </div>
+                ''',
+                unsafe_allow_html=True
+            )
+
+    st.markdown('</div>', unsafe_allow_html=True)
 
 with right:
     st.markdown('<div class="card">', unsafe_allow_html=True)
@@ -711,6 +856,23 @@ with right:
 
 
 # =========================
+# TEST KEY
+# =========================
+if clear_key_test_btn:
+    st.session_state["api_test_results"] = []
+    st.rerun()
+
+if test_key_btn:
+    raw_keys = [line.strip() for line in keys_text.splitlines() if line.strip()]
+    if not raw_keys:
+        st.warning("Bạn chưa nhập API key để test.")
+    else:
+        with st.spinner("Đang test API key..."):
+            st.session_state["api_test_results"] = test_all_api_keys(raw_keys, model_name)
+        st.rerun()
+
+
+# =========================
 # CLEAR
 # =========================
 if clear_btn:
@@ -751,8 +913,18 @@ if run_btn:
     else:
         api_keys, worker_slots = collect_api_keys_and_slots(keys_text, batch_text)
 
+        if st.session_state["api_test_results"]:
+            ok_keys = {
+                item["key"].strip()
+                for item in st.session_state["api_test_results"]
+                if item.get("ok")
+            }
+            if ok_keys:
+                api_keys = [k for k in api_keys if k.strip() in ok_keys]
+                worker_slots = [k for k in worker_slots if k.strip() in ok_keys]
+
         if not api_keys:
-            st.error("Bạn chưa nhập API key nào.")
+            st.error("Bạn chưa nhập API key nào hoặc tất cả key đã bị loại sau khi test.")
         elif not worker_slots:
             st.error("Không có worker slot hợp lệ.")
         else:
@@ -779,6 +951,7 @@ if run_btn:
                         model_name,
                         style_prompt,
                         int(batch_size),
+                        source_language,
                     )
                     future_map[future] = f.name
 
