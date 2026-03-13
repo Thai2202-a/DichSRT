@@ -4,7 +4,6 @@ import time
 import zipfile
 from dataclasses import dataclass
 from typing import List, Dict, Tuple, Optional, Any
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import streamlit as st
 from google import genai
@@ -25,7 +24,6 @@ DEFAULT_MODEL = "gemini-2.5-flash"
 DEFAULT_BATCH_SIZE = 40
 MAX_RETRIES_PER_KEY = 2
 RETRY_SLEEP_SECONDS = 0.45
-MAX_FILE_WORKERS = 3
 
 BASE_SYSTEM_PROMPT = """
 Bạn là chuyên gia dịch phụ đề phim sang tiếng Việt.
@@ -192,12 +190,6 @@ div[data-testid="stFileUploaderDropzone"] {
     justify-content:space-between;
     padding:14px 16px 0 16px;
 }
-.done-popup-close button {
-    min-height:38px !important;
-    height:38px !important;
-    border-radius:999px !important;
-    padding:0 14px !important;
-}
 .done-popup-body {
     padding: 6px 16px 16px 16px;
 }
@@ -225,6 +217,76 @@ div[data-testid="stFileUploaderDropzone"] {
     color: #64748b;
     font-size: .95rem;
     line-height: 1.5;
+}
+
+.translate-inline {
+    background:#eff6ff;
+    border:1px solid #bfdbfe;
+    color:#1d4ed8;
+    border-radius:18px;
+    padding:14px 16px;
+    display:flex;
+    align-items:center;
+    gap:12px;
+    margin-bottom:16px;
+}
+.translate-inline-spinner {
+    width:20px;
+    height:20px;
+    border-radius:999px;
+    border:3px solid #bfdbfe;
+    border-top-color:#2563eb;
+    animation: spinDtInline .8s linear infinite;
+    flex:0 0 auto;
+}
+.translate-inline-title {
+    font-weight:900;
+    color:#1e3a8a;
+    font-size:.96rem;
+}
+.translate-inline-text {
+    color:#1d4ed8;
+    font-size:.9rem;
+    margin-top:2px;
+}
+
+.batch-live-box {
+    background:#fff;
+    border:1px solid rgba(15,23,42,.06);
+    border-radius:18px;
+    padding:14px;
+    min-height:220px;
+}
+.batch-line-pending {
+    padding:10px 12px;
+    border-radius:12px;
+    background:#eff6ff;
+    color:#1d4ed8;
+    margin-bottom:8px;
+    border:1px solid #bfdbfe;
+    font-weight:700;
+}
+.batch-line-done {
+    padding:10px 12px;
+    border-radius:12px;
+    background:#ecfdf5;
+    color:#166534;
+    margin-bottom:8px;
+    border:1px solid #bbf7d0;
+    font-weight:700;
+}
+.batch-line-error {
+    padding:10px 12px;
+    border-radius:12px;
+    background:#fef2f2;
+    color:#991b1b;
+    margin-bottom:8px;
+    border:1px solid #fecaca;
+    font-weight:700;
+}
+
+@keyframes spinDtInline {
+    to { transform: rotate(360deg); }
 }
 </style>
 """
@@ -330,7 +392,6 @@ def is_meaningful_text(text: str) -> bool:
     sample = (text or "").strip()
     if not sample:
         return False
-
     cleaned = re.sub(r"[\W_]+", "", sample, flags=re.UNICODE)
     return bool(cleaned)
 
@@ -516,7 +577,6 @@ def try_translate_batch_with_key(
             text = (response.text or "").strip()
             if not text:
                 raise RuntimeError("Model trả về rỗng")
-
             return parse_translated_response(batch, text)
 
         except Exception as e:
@@ -585,7 +645,8 @@ def process_one_file(
     model_name: str,
     style_prompt: str,
     batch_size: int,
-    source_language: str
+    source_language: str,
+    progress_callback=None
 ):
     try:
         source_text = source_bytes.decode("utf-8-sig")
@@ -668,40 +729,59 @@ def process_one_file(
             "detected_lang": detected_lang_label,
         }
 
-    with ThreadPoolExecutor(max_workers=max(1, len(worker_slots))) as executor:
-        futures = []
-        for batch_id, batch in enumerate(batches):
-            futures.append(
-                executor.submit(
-                    translate_batch_with_failover,
-                    batch_id,
-                    batch,
-                    worker_slots,
-                    model_name,
-                    style_prompt,
-                    source_language
-                )
+    for batch_id, batch in enumerate(batches):
+        batch_preview = [f"[{item.index}] {item.text[:80]}" for item in batch[:5]]
+
+        if progress_callback:
+            progress_callback(
+                event="batch_start",
+                file_name=file_name,
+                batch_id=batch_id,
+                batch_total=len(batches),
+                batch_lines=batch_preview
             )
 
-        for future in as_completed(futures):
-            batch_id, ok, translated_lines, error_text = future.result()
-            batch = batches[batch_id]
+        _, ok, translated_lines, error_text = translate_batch_with_failover(
+            batch_id,
+            batch,
+            worker_slots,
+            model_name,
+            style_prompt,
+            source_language
+        )
 
-            for item, translated in zip(batch, translated_lines):
-                item.translated_text = translated
+        for item, translated in zip(batch, translated_lines):
+            item.translated_text = translated
 
-            preview_src = "\n\n".join(item.text for item in batch[:3])
-            preview_dst = "\n\n".join(item.translated_text for item in batch[:3])
+        preview_src = "\n\n".join(item.text for item in batch[:3])
+        preview_dst = "\n\n".join(item.translated_text for item in batch[:3])
 
-            done_lines += len(batch)
-            elapsed = max(time.time() - start_time, 0.001)
-            speed = done_lines / elapsed
+        done_lines += len(batch)
+        elapsed = max(time.time() - start_time, 0.001)
+        speed = done_lines / elapsed
 
-            if ok:
-                logs.append(f"✓ {file_name} | Batch {batch_id + 1}/{len(batches)} | {len(batch)} dòng | {speed:.1f} dòng/s")
-            else:
-                failed_batches += 1
-                logs.append(f"✗ {file_name} | Batch {batch_id + 1}/{len(batches)} lỗi: {error_text}")
+        if ok:
+            logs.append(f"✓ {file_name} | Batch {batch_id + 1}/{len(batches)} | {len(batch)} dòng | {speed:.1f} dòng/s")
+            if progress_callback:
+                progress_callback(
+                    event="batch_done",
+                    file_name=file_name,
+                    batch_id=batch_id,
+                    batch_total=len(batches),
+                    batch_lines=[f"[{item.index}] {item.translated_text[:80]}" for item in batch[:5]]
+                )
+        else:
+            failed_batches += 1
+            logs.append(f"✗ {file_name} | Batch {batch_id + 1}/{len(batches)} lỗi: {error_text}")
+            if progress_callback:
+                progress_callback(
+                    event="batch_error",
+                    file_name=file_name,
+                    batch_id=batch_id,
+                    batch_total=len(batches),
+                    batch_lines=[f"[{item.index}] {item.text[:80]}" for item in batch[:5]],
+                    error_text=error_text
+                )
 
     final_speed = done_lines / max(time.time() - start_time, 0.001)
 
@@ -758,6 +838,10 @@ def init_state():
         "detected_lang_text": "Chưa phát hiện",
         "api_test_results": [],
         "show_done_popup": False,
+        "show_translate_status": False,
+        "status_text": "",
+        "live_pending_lines": [],
+        "live_done_lines": [],
         "stats": {
             "files": 0,
             "total": 0,
@@ -785,9 +869,32 @@ def reset_run_state():
     st.session_state["had_error"] = False
     st.session_state["detected_lang_text"] = "Chưa phát hiện"
     st.session_state["show_done_popup"] = False
+    st.session_state["show_translate_status"] = False
+    st.session_state["status_text"] = ""
+    st.session_state["live_pending_lines"] = []
+    st.session_state["live_done_lines"] = []
     st.session_state["stats"] = {"files": 0, "total": 0, "skip": 0, "need": 0, "done": 0, "failed_batches": 0}
     st.session_state["speed_text"] = "0 dòng/s"
     st.session_state["progress_percent"] = 0
+
+
+def render_translate_status(placeholder):
+    if st.session_state.get("show_translate_status"):
+        status_text = st.session_state.get("status_text", "Đang dịch phụ đề...")
+        placeholder.markdown(
+            f"""
+            <div class="translate-inline">
+                <div class="translate-inline-spinner"></div>
+                <div>
+                    <div class="translate-inline-title">Đang dịch phụ đề</div>
+                    <div class="translate-inline-text">{status_text}</div>
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    else:
+        placeholder.empty()
 
 
 # =========================
@@ -802,7 +909,7 @@ st.markdown(
     '    <div class="brand-icon">DT</div>'
     '    <div><div class="brand-title">Đình Thái</div><div class="brand-sub">SRT Translator Studio</div></div>'
     '  </div>'
-    '  <div class="version-pill">V8 POPUP DONE</div>'
+    '  <div class="version-pill">V10 INLINE STATUS</div>'
     '</div>',
     unsafe_allow_html=True,
 )
@@ -823,10 +930,8 @@ with left:
 
     with c1:
         model_name = st.selectbox("MODEL", options=["gemini-2.5-flash", "gemini-2.0-flash"], index=0)
-
     with c2:
         batch_size = st.number_input("BATCH SIZE", min_value=1, max_value=200, value=DEFAULT_BATCH_SIZE, step=1)
-
     with c3:
         source_language = st.selectbox("NGÔN NGỮ NGUỒN", options=SOURCE_LANGUAGE_OPTIONS, index=0)
 
@@ -899,6 +1004,9 @@ with right:
     st.markdown('<div class="card">', unsafe_allow_html=True)
     st.markdown('<div class="card-title">🚀 Điều Khiển</div>', unsafe_allow_html=True)
 
+    translate_status_placeholder = st.empty()
+    render_translate_status(translate_status_placeholder)
+
     progress_placeholder = st.empty()
     percent_placeholder = st.empty()
 
@@ -970,6 +1078,29 @@ with right:
         st.code(st.session_state["last_preview_dst"] or "Chưa có preview")
     st.markdown('</div>', unsafe_allow_html=True)
 
+    st.markdown('<div class="card"><div class="card-title">📡 Tiến Trình Dịch Theo Dòng</div>', unsafe_allow_html=True)
+    live_c1, live_c2 = st.columns(2)
+
+    with live_c1:
+        st.markdown('<div class="small">Đang dịch</div>', unsafe_allow_html=True)
+        pending_live_placeholder = st.empty()
+        if st.session_state["live_pending_lines"]:
+            pending_html = "".join([f'<div class="batch-line-pending">{x}</div>' for x in st.session_state["live_pending_lines"][-8:]])
+            pending_live_placeholder.markdown(f'<div class="batch-live-box">{pending_html}</div>', unsafe_allow_html=True)
+        else:
+            pending_live_placeholder.markdown('<div class="batch-live-box"><div class="small">Chưa có dòng nào đang dịch.</div></div>', unsafe_allow_html=True)
+
+    with live_c2:
+        st.markdown('<div class="small">Đã hoàn thành</div>', unsafe_allow_html=True)
+        done_live_placeholder = st.empty()
+        if st.session_state["live_done_lines"]:
+            done_html = "".join([f'<div class="batch-line-done">{x}</div>' for x in st.session_state["live_done_lines"][-8:]])
+            done_live_placeholder.markdown(f'<div class="batch-live-box">{done_html}</div>', unsafe_allow_html=True)
+        else:
+            done_live_placeholder.markdown('<div class="batch-live-box"><div class="small">Chưa có dòng nào hoàn thành.</div></div>', unsafe_allow_html=True)
+
+    st.markdown('</div>', unsafe_allow_html=True)
+
 
 # =========================
 # TEST KEY
@@ -1029,68 +1160,112 @@ if run_btn:
             total_files = len(uploaded_files)
             st.session_state["stats"]["files"] = total_files
 
-            with ThreadPoolExecutor(max_workers=min(MAX_FILE_WORKERS, total_files)) as executor:
-                future_map = {}
-                for f in uploaded_files:
-                    future = executor.submit(
-                        process_one_file,
-                        f.name,
-                        f.read(),
-                        partial_map.get(f.name),
-                        worker_slots,
-                        model_name,
-                        style_prompt,
-                        int(batch_size),
-                        source_language,
+            pending_box = pending_live_placeholder
+            done_box = done_live_placeholder
+
+            def update_live_boxes():
+                if st.session_state["live_pending_lines"]:
+                    pending_html = "".join(
+                        [f'<div class="batch-line-pending">{x}</div>' for x in st.session_state["live_pending_lines"][-8:]]
                     )
-                    future_map[future] = f.name
+                    pending_box.markdown(f'<div class="batch-live-box">{pending_html}</div>', unsafe_allow_html=True)
+                else:
+                    pending_box.markdown('<div class="batch-live-box"><div class="small">Chưa có dòng nào đang dịch.</div></div>', unsafe_allow_html=True)
 
-                completed_files = 0
-                agg_total = 0
-                agg_skip = 0
-                agg_need = 0
-                agg_done = 0
-                agg_failed = 0
+                if st.session_state["live_done_lines"]:
+                    done_html = "".join(
+                        [f'<div class="batch-line-done">{x}</div>' for x in st.session_state["live_done_lines"][-8:]]
+                    )
+                    done_box.markdown(f'<div class="batch-live-box">{done_html}</div>', unsafe_allow_html=True)
+                else:
+                    done_box.markdown('<div class="batch-live-box"><div class="small">Chưa có dòng nào hoàn thành.</div></div>', unsafe_allow_html=True)
 
-                for future in as_completed(future_map):
-                    result = future.result()
-                    results.append(result)
-                    completed_files += 1
+            def ui_progress_callback(event, file_name, batch_id, batch_total, batch_lines, error_text=""):
+                if event == "batch_start":
+                    st.session_state["show_translate_status"] = True
+                    st.session_state["status_text"] = f"{file_name} • Batch {batch_id + 1}/{batch_total}"
+                    st.session_state["live_pending_lines"] = [f"{file_name} • {line}" for line in batch_lines]
+                    update_live_boxes()
+                    render_translate_status(translate_status_placeholder)
 
-                    agg_total += result["stats"]["total"]
-                    agg_skip += result["stats"]["skip"]
-                    agg_need += result["stats"]["need"]
-                    agg_done += result["stats"]["done"]
-                    agg_failed += result["stats"]["failed_batches"]
+                elif event == "batch_done":
+                    st.session_state["live_done_lines"].extend([f"{file_name} • {line}" for line in batch_lines])
+                    st.session_state["live_pending_lines"] = []
+                    update_live_boxes()
+                    render_translate_status(translate_status_placeholder)
 
-                    elapsed = max(time.time() - start_time, 0.001)
-                    speed = agg_done / elapsed if agg_done > 0 else 0.0
-                    percent = int((completed_files / total_files) * 100)
+                elif event == "batch_error":
+                    st.session_state["live_done_lines"].extend([f"{file_name} • {line}" for line in batch_lines])
+                    st.session_state["live_done_lines"].append(f"{file_name} • Batch {batch_id + 1} lỗi: {error_text}")
+                    st.session_state["live_pending_lines"] = []
+                    update_live_boxes()
+                    render_translate_status(translate_status_placeholder)
 
-                    st.session_state["stats"] = {
-                        "files": total_files,
-                        "total": agg_total,
-                        "skip": agg_skip,
-                        "need": agg_need,
-                        "done": agg_done,
-                        "failed_batches": agg_failed,
-                    }
-                    st.session_state["speed_text"] = f"{speed:.1f} dòng/s"
-                    st.session_state["progress_percent"] = percent
-                    st.session_state["last_preview_src"] = result["preview_src"]
-                    st.session_state["last_preview_dst"] = result["preview_dst"]
-                    st.session_state["detected_lang_text"] = result.get("detected_lang", "Không xác định")
+            completed_files = 0
+            agg_total = 0
+            agg_skip = 0
+            agg_need = 0
+            agg_done = 0
+            agg_failed = 0
 
-                    progress_bar.progress(completed_files / total_files)
-                    percent_placeholder.markdown(f"**{percent}%**")
+            for f in uploaded_files:
+                st.session_state["show_translate_status"] = True
+                st.session_state["status_text"] = f"Đang chuẩn bị dịch file {f.name}"
+                render_translate_status(translate_status_placeholder)
 
-                    logs.extend(result["logs"][-4:])
-                    if result["error"]:
-                        logs.append(f"✗ {result['file_name']}: {result['error']}")
-                        st.session_state["had_error"] = True
+                result = process_one_file(
+                    f.name,
+                    f.read(),
+                    partial_map.get(f.name),
+                    worker_slots,
+                    model_name,
+                    style_prompt,
+                    int(batch_size),
+                    source_language,
+                    progress_callback=ui_progress_callback
+                )
 
-                    st.session_state["run_logs"] = logs
-                    log_placeholder.code("\n".join(logs[-14:]))
+                results.append(result)
+                completed_files += 1
+
+                agg_total += result["stats"]["total"]
+                agg_skip += result["stats"]["skip"]
+                agg_need += result["stats"]["need"]
+                agg_done += result["stats"]["done"]
+                agg_failed += result["stats"]["failed_batches"]
+
+                elapsed = max(time.time() - start_time, 0.001)
+                speed = agg_done / elapsed if agg_done > 0 else 0.0
+                percent = int((completed_files / total_files) * 100)
+
+                st.session_state["stats"] = {
+                    "files": total_files,
+                    "total": agg_total,
+                    "skip": agg_skip,
+                    "need": agg_need,
+                    "done": agg_done,
+                    "failed_batches": agg_failed,
+                }
+                st.session_state["speed_text"] = f"{speed:.1f} dòng/s"
+                st.session_state["progress_percent"] = percent
+                st.session_state["last_preview_src"] = result["preview_src"]
+                st.session_state["last_preview_dst"] = result["preview_dst"]
+                st.session_state["detected_lang_text"] = result.get("detected_lang", "Không xác định")
+
+                progress_bar.progress(completed_files / total_files)
+                percent_placeholder.markdown(f"**{percent}%**")
+
+                logs.extend(result["logs"][-4:])
+                if result["error"]:
+                    logs.append(f"✗ {result['file_name']}: {result['error']}")
+                    st.session_state["had_error"] = True
+
+                st.session_state["run_logs"] = logs
+                log_placeholder.code("\n".join(logs[-14:]))
+
+            st.session_state["show_translate_status"] = False
+            st.session_state["status_text"] = ""
+            render_translate_status(translate_status_placeholder)
 
             zip_buffer = io.BytesIO()
             with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
