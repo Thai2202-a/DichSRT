@@ -25,7 +25,19 @@ MAX_RETRIES_PER_KEY = 2
 RETRY_SLEEP_SECONDS = 0.35
 MAX_PARALLEL_BATCHES = 4
 
-# Ngôn ngữ nguồn
+BASE_SYSTEM_PROMPT = """
+Bạn là chuyên gia dịch phụ đề phim.
+YÊU CẦU CHUNG:
+- Dịch tự nhiên, mượt, đúng ngữ cảnh hội thoại.
+- Giữ văn phong giống phụ đề phim, dễ đọc, gọn.
+- Không giải thích, không ghi chú.
+- Không bỏ dòng nào.
+- Không đánh số lại.
+- Mỗi mục phụ đề đầu vào phải trả về đúng 1 dòng đầu ra tương ứng.
+- Nếu gặp tên riêng thì xử lý hợp lý theo ngữ cảnh.
+- Không thêm ký tự thừa.
+""".strip()
+
 SOURCE_LANGUAGE_OPTIONS = [
     "Tự động",
     "Tiếng Trung",
@@ -41,7 +53,6 @@ SOURCE_LANGUAGE_OPTIONS = [
     "Tiếng Ả Rập",
 ]
 
-# Ngôn ngữ đích (Target)
 TARGET_LANGUAGE_OPTIONS = [
     "Tiếng Việt",
     "Tiếng Bồ Đào Nha",
@@ -271,7 +282,7 @@ class SubtitleItem:
     translated_text: str = ""
 
 # =========================
-# XỬ LÝ SRT & DETECT NGÔN NGỮ
+# XỬ LÝ SRT
 # =========================
 def read_srt_content(content: str) -> List[SubtitleItem]:
     content = content.strip()
@@ -300,14 +311,20 @@ def detect_language(text: str) -> str:
     sample = (text or "").strip()
     if not sample:
         return "unknown"
-    if re.search(r"[\u4e00-\u9fff]", sample): return "zh"
-    if re.search(r"[\u3040-\u309f\u30a0-\u30ff]", sample): return "ja"
-    if re.search(r"[\uac00-\ud7af]", sample): return "ko"
-    if re.search(r"[\u0e00-\u0e7f]", sample): return "th"
-    if re.search(r"[\u0400-\u04FF]", sample): return "ru"
-    if re.search(r"[\u0600-\u06FF]", sample): return "ar"
-    if re.search(r"[À-ỹà-ỹĂăÂâĐđÊêÔôƠơƯư]", sample): return "vi"
-    
+    if re.search(r"[\u4e00-\u9fff]", sample):
+        return "zh"
+    if re.search(r"[\u3040-\u309f\u30a0-\u30ff]", sample):
+        return "ja"
+    if re.search(r"[\uac00-\ud7af]", sample):
+        return "ko"
+    if re.search(r"[\u0e00-\u0e7f]", sample):
+        return "th"
+    if re.search(r"[\u0400-\u04FF]", sample):
+        return "ru"
+    if re.search(r"[\u0600-\u06FF]", sample):
+        return "ar"
+    if re.search(r"[À-ỹà-ỹĂăÂâĐđÊêÔôƠơƯư]", sample):
+        return "vi"
     latin_letters = re.findall(r"[A-Za-z]", sample)
     if latin_letters:
         lower = sample.lower()
@@ -329,15 +346,19 @@ def detect_dominant_language(items: List[SubtitleItem], sample_size: int = 80) -
         if checked >= sample_size:
             break
         text = (item.text or "").strip()
-        if not text: continue
+        if not text:
+            continue
         lang = detect_language(text)
         counts[lang] = counts.get(lang, 0) + 1
         checked += 1
-    return max(counts, key=counts.get) if counts else "unknown"
+    if not counts:
+        return "unknown"
+    return max(counts, key=counts.get)
 
 def is_meaningful_text(text: str) -> bool:
     sample = (text or "").strip()
-    if not sample: return False
+    if not sample:
+        return False
     cleaned = re.sub(r"[\W_]+", "", sample, flags=re.UNICODE)
     return bool(cleaned)
 
@@ -353,8 +374,9 @@ def merge_partial_translation(source_items: List[SubtitleItem], partial_items: L
     merged = 0
     limit = min(len(source_items), len(partial_items))
     for i in range(limit):
-        if partial_items[i].text.strip():
-            source_items[i].translated_text = partial_items[i].text.strip()
+        partial_text = partial_items[i].text.strip()
+        if partial_text:
+            source_items[i].translated_text = partial_text
             merged += 1
     return source_items, merged
 
@@ -363,55 +385,246 @@ def build_batches(items: List[SubtitleItem], batch_size: int) -> List[List[Subti
     return [pending[i:i + batch_size] for i in range(0, len(pending), batch_size)]
 
 # =========================
-# PROMPT & GEMINI
+# API KEY / GEMINI
 # =========================
+def create_client(api_key: str):
+    return genai.Client(api_key=api_key.strip())
+
+def mask_api_key(api_key: str) -> str:
+    api_key = (api_key or "").strip()
+    if len(api_key) <= 10:
+        return api_key
+    return f"{api_key[:6]}...{api_key[-4:]}"
+
+def test_single_api_key(api_key: str, model_name: str = DEFAULT_MODEL) -> Dict[str, Any]:
+    api_key = (api_key or "").strip()
+    if not api_key:
+        return {
+            "key": api_key,
+            "ok": False,
+            "status": "KEY RỖNG",
+            "color": "red",
+            "detail": "Không có nội dung."
+        }
+    try:
+        client = create_client(api_key)
+        response = client.models.generate_content(
+            model=model_name,
+            contents="Chỉ trả lời đúng từ OK",
+            config=types.GenerateContentConfig(temperature=0),
+        )
+        text = (response.text or "").strip().lower()
+        if text:
+            return {
+                "key": api_key,
+                "ok": True,
+                "status": "KEY OK",
+                "color": "green",
+                "detail": "Dùng được."
+            }
+        return {
+            "key": api_key,
+            "ok": False,
+            "status": "PHẢN HỒI RỖNG",
+            "color": "red",
+            "detail": "Model không trả dữ liệu."
+        }
+    except Exception as e:
+        err = str(e).lower()
+        if "quota" in err or "429" in err or "resource_exhausted" in err:
+            status = "LIMIT / HẾT QUOTA"
+        elif "api key not valid" in err or "invalid" in err or "permission" in err or "unauthenticated" in err:
+            status = "KEY KHÔNG HỢP LỆ"
+        elif "deadline" in err or "timeout" in err:
+            status = "TIMEOUT"
+        else:
+            status = "LỖI"
+        return {
+            "key": api_key,
+            "ok": False,
+            "status": status,
+            "color": "red",
+            "detail": str(e)
+        }
+
+def test_all_api_keys(api_keys: List[str], model_name: str) -> List[Dict[str, Any]]:
+    return [test_single_api_key(key, model_name) for key in api_keys]
+
 def build_prompt(batch: List[SubtitleItem], style_prompt: str, source_language: str, target_language: str) -> str:
-    rows = [f"[{i+1}] {item.text.replace(chr(13), '').strip()}" for i, item in enumerate(batch)]
+    rows = []
+    for i, item in enumerate(batch, start=1):
+        rows.append(f"[{i}] {item.text.replace(chr(13), '').strip()}")
     joined_rows = "\n".join(rows)
-    
-    extra = f"\nYÊU CẦU PHONG CÁCH DỊCH RIÊNG:\n{style_prompt.strip()}\n" if style_prompt.strip() else ""
-    
-    src_instruction = "- Tự động phát hiện ngôn ngữ của từng dòng.\n" if source_language == "Tự động" else f"- Ngôn ngữ nguồn là {source_language}.\n"
-
-    prompt = f"""
-Bạn là chuyên gia dịch phụ đề phim chuyên nghiệp.
-Hãy dịch sang **{target_language}** một cách tự nhiên, mượt mà, phù hợp xem phim.
-
-YÊU CẦU:
-- Dịch sát nghĩa nhưng tự nhiên, giữ giọng điệu hội thoại.
-- Giữ độ dài ngắn gọn như phụ đề phim.
-- Không thêm giải thích, chú thích hay ký tự thừa.
-- Không bỏ dòng nào, không thay đổi số thứ tự.
-- Nếu dòng đã là {target_language} thì giữ nguyên hoặc chỉnh nhẹ cho hay hơn.
-
-{extra}
-{src_instruction}
-Dịch tất cả sang {target_language}.
-
-ĐỊNH DẠNG TRẢ VỀ (bắt buộc):
-[số] bản_dịch
-
-DANH SÁCH:
-{joined_rows}
-""".strip()
-    return prompt
+    extra = ""
+    if style_prompt.strip():
+        extra = f"\nYÊU CẦU PHONG CÁCH DỊCH RIÊNG:\n{style_prompt.strip()}\n"
+    if source_language == "Tự động":
+        lang_instruction = (
+            "- Tự động phát hiện ngôn ngữ của từng dòng.\n"
+            "- Nếu file có nhiều ngôn ngữ khác nhau thì vẫn phải xử lý đúng từng dòng.\n"
+        )
+    else:
+        lang_instruction = (
+            f"- Xem toàn bộ nội dung đầu vào là {source_language}.\n"
+        )
+    prompt = (
+        f"{BASE_SYSTEM_PROMPT}\n"
+        f"{extra}\n"
+        "NHIỆM VỤ:\n"
+        f"{lang_instruction}"
+        f"- Dịch tất cả sang {target_language}.\n"
+        f"- Nếu một dòng đã là {target_language} thì giữ nguyên hoặc chỉnh nhẹ cho tự nhiên hơn.\n\n"
+        "ĐỊNH DẠNG TRẢ VỀ:\n"
+        "- Mỗi mục phải trả về đúng 1 dòng theo định dạng:\n"
+        "[số] bản_dịch\n"
+        "- Không được trả về thêm bất kỳ dòng giải thích nào.\n\n"
+        "DANH SÁCH:\n"
+        f"{joined_rows}"
+    )
+    return prompt.strip()
 
 def parse_translated_response(batch: List[SubtitleItem], response_text: str) -> List[str]:
-    mapping = {}
+    mapping: Dict[int, str] = {}
     for line in response_text.splitlines():
         line = line.strip()
         match = re.match(r"^\[(\d+)\]\s*(.*)$", line)
         if match:
             mapping[int(match.group(1))] = match.group(2).strip()
-    return [mapping.get(i+1, batch[i].text) for i in range(len(batch))]
+    results = []
+    for i in range(1, len(batch) + 1):
+        txt = mapping.get(i, "").strip()
+        if not txt:
+            txt = batch[i - 1].text
+        results.append(txt)
+    return results
 
-# (Các hàm create_client, mask_api_key, test_single_api_key, test_all_api_keys, try_translate_batch_with_key, translate_batch_with_failover, collect_api_keys_and_slots giữ nguyên như code cũ của bạn)
-
-# Vì code quá dài, tôi giữ nguyên logic phần sau. Bạn có thể copy phần còn lại từ code cũ của mình và chỉ thay đổi 2 chỗ quan trọng:
-
-# 1. Trong phần UI (with left):
-    with c3:
-        target_language = st.selectbox("DỊCH SANG", options=TARGET_LANGUAGE_OPTIONS, index=0)
-
-# 2. Khi gọi build_prompt trong try_translate_batch_with_key, sửa thành:
+def try_translate_batch_with_key(
+    api_key: str,
+    model_name: str,
+    batch: List[SubtitleItem],
+    style_prompt: str,
+    source_language: str,
+    target_language: str
+) -> List[str]:
+    client = create_client(api_key)
     prompt = build_prompt(batch, style_prompt, source_language, target_language)
+    last_error: Optional[Exception] = None
+    for _ in range(MAX_RETRIES_PER_KEY):
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.2),
+            )
+            text = (response.text or "").strip()
+            if not text:
+                raise RuntimeError("Model trả về rỗng")
+            return parse_translated_response(batch, text)
+        except Exception as e:
+            last_error = e
+            time.sleep(RETRY_SLEEP_SECONDS)
+    raise RuntimeError(str(last_error) if last_error else "Unknown error")
+
+def translate_batch_with_failover(
+    batch_id: int,
+    batch: List[SubtitleItem],
+    worker_slots: List[str],
+    model_name: str,
+    style_prompt: str,
+    source_language: str,
+    target_language: str
+):
+    last_error = ""
+    for api_key in worker_slots:
+        try:
+            translated = try_translate_batch_with_key(
+                api_key,
+                model_name,
+                batch,
+                style_prompt,
+                source_language,
+                target_language
+            )
+            return batch_id, True, translated, ""
+        except Exception as e:
+            last_error = str(e)
+    return batch_id, False, [item.text for item in batch], last_error
+
+def collect_api_keys_and_slots(keys_raw: str, batches_raw: str) -> Tuple[List[str], List[str]]:
+    raw_keys = keys_raw.splitlines()
+    raw_batches = batches_raw.splitlines()
+    api_keys = [line.strip() for line in raw_keys if line.strip()]
+    batch_values = [line.strip() for line in raw_batches]
+    worker_slots: List[str] = []
+    for idx, key in enumerate(api_keys):
+        batch_value = batch_values[idx] if idx < len(batch_values) else "1"
+        try:
+            count = int(batch_value)
+            if count < 1:
+                count = 1
+        except ValueError:
+            count = 1
+        for _ in range(count):
+            worker_slots.append(key)
+    return api_keys, worker_slots
+
+# =========================
+# XỬ LÝ FILE - TĂNG TỐC
+# =========================
+def process_one_file(
+    file_name: str,
+    source_bytes: bytes,
+    partial_bytes: Optional[bytes],
+    worker_slots: List[str],
+    model_name: str,
+    style_prompt: str,
+    batch_size: int,
+    source_language: str,
+    target_language: str,          # ← Thêm tham số này
+    progress_callback=None
+):
+    # ... (phần decode, read_srt_content, detect_language, prepare_items... giữ nguyên như code cũ của bạn)
+
+    # Chỉ thay đổi chỗ gọi translate_batch_with_failover
+    # Trong vòng lặp with ThreadPoolExecutor:
+            future = executor.submit(
+                translate_batch_with_failover,
+                batch_id,
+                batch,
+                worker_slots,
+                model_name,
+                style_prompt,
+                source_language,
+                target_language          # ← Thêm target_language vào đây
+            )
+
+    # Phần còn lại của hàm process_one_file giữ nguyên (return dict...)
+
+# Phần SESSION STATE, UI, test key, run_btn... giữ nguyên như code bạn gửi.
+# Chỉ cần thay đổi 2 chỗ trong UI:
+
+# Trong with left: phần Cấu Hình Dịch
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        model_name = st.selectbox("MODEL", options=["gemini-2.5-flash", "gemini-2.0-flash"], index=0)
+    with c2:
+        batch_size = st.number_input("BATCH SIZE", min_value=1, max_value=200, value=DEFAULT_BATCH_SIZE, step=1)
+    with c3:
+        source_language = st.selectbox("NGÔN NGỮ NGUỒN", options=SOURCE_LANGUAGE_OPTIONS, index=0)
+
+    # Thêm dòng này ngay dưới source_language
+    target_language = st.selectbox("DỊCH SANG", options=TARGET_LANGUAGE_OPTIONS, index=0)
+
+# Và trong phần run_btn, khi gọi process_one_file, thêm target_language:
+                result = process_one_file(
+                    f.name,
+                    f.read(),
+                    partial_map.get(f.name),
+                    worker_slots,
+                    model_name,
+                    style_prompt,
+                    int(batch_size),
+                    source_language,
+                    target_language,        # ← Thêm dòng này
+                    progress_callback=ui_progress_callback
+                )
