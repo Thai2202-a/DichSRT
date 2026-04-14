@@ -470,13 +470,21 @@ with left:
     with cfg2:
         batch_size = st.number_input("BATCH SIZE", min_value=1, max_value=200, value=DEFAULT_BATCH_SIZE, step=1)
     
-    # ==================== NGÔN NGỮ ĐÍCH (ĐÃ THÊM) ====================
+    # ==================== NGÔN NGỮ NGUỒN (CÓ TIẾNG TRUNG + TIẾNG ANH) ====================
+    source_language = st.selectbox(
+        "NGÔN NGỮ NGUỒN",
+        options=["Tiếng Trung", "Tiếng Anh"],
+        index=0
+    )
+    # ===================================================================================
+
+    # ==================== NGÔN NGỮ ĐÍCH (TIẾNG VIỆT + TIẾNG BỒ ĐÀO NHA) ====================
     target_language = st.selectbox(
         "NGÔN NGỮ ĐÍCH",
         options=["Tiếng Việt", "Tiếng Bồ Đào Nha"],
         index=0
     )
-    # =================================================================
+    # ===================================================================================
 
     output_name = st.text_input("TÊN FILE XUẤT", value="output_vi.srt")
     st.markdown('</div>', unsafe_allow_html=True)
