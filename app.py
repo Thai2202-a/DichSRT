@@ -9,15 +9,15 @@ import streamlit as st
 from google import genai
 from google.genai import types
 
+# =========================
+# CẤU HÌNH
+# =========================
 st.set_page_config(
     page_title="Đình Thái - SRT Translator Studio",
     page_icon="🎬",
     layout="wide"
 )
 
-# =========================
-# CẤU HÌNH
-# =========================
 DEFAULT_MODEL = "gemini-2.5-flash"
 DEFAULT_BATCH_SIZE = 80
 MAX_RETRIES_PER_KEY = 2
@@ -124,29 +124,29 @@ st.markdown("**Dịch phụ đề sang Tiếng Bồ Đào Nha**")
 left, right = st.columns([1.1, 1.6])
 
 with left:
-    uploaded_files = st.file_uploader("Upload file SRT", type=["srt"], accept_multiple_files=True, key="uploader")
-    partial_zip = st.file_uploader("File dịch dở (ZIP hoặc SRT)", type=["zip", "srt"], key="partial")
+    uploaded_files = st.file_uploader("Upload file SRT", type=["srt"], accept_multiple_files=True)
+    partial_zip = st.file_uploader("File dịch dở (ZIP hoặc SRT)", type=["zip", "srt"])
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        model_name = st.selectbox("Model", ["gemini-2.5-flash", "gemini-2.0-flash"], key="model")
+        model_name = st.selectbox("Model", ["gemini-2.5-flash", "gemini-2.0-flash"])
     with col2:
-        batch_size = st.number_input("Batch Size", 10, 200, DEFAULT_BATCH_SIZE, key="batch")
+        batch_size = st.number_input("Batch Size", 10, 200, DEFAULT_BATCH_SIZE)
     with col3:
-        source_language = st.selectbox("Ngôn ngữ nguồn", SOURCE_LANGUAGE_OPTIONS, index=0, key="source")
+        source_language = st.selectbox("Ngôn ngữ nguồn", SOURCE_LANGUAGE_OPTIONS, index=0)
 
-    target_language = st.selectbox("Dịch sang", TARGET_LANGUAGE_OPTIONS, index=1, key="target")  # Mặc định Tiếng Bồ Đào Nha
+    target_language = st.selectbox("Dịch sang", TARGET_LANGUAGE_OPTIONS, index=1)  # Mặc định Tiếng Bồ Đào Nha
 
-    style_prompt = st.text_area("Phong cách dịch", "Dịch tự nhiên, mượt như phụ đề phim.", height=100, key="style")
+    style_prompt = st.text_area("Phong cách dịch", "Dịch tự nhiên, mượt như phụ đề phim.", height=100)
 
-    keys_text = st.text_area("API Keys (mỗi dòng 1 key)", height=120, key="keys")
-    slots_text = st.text_area("Slots (số worker mỗi key)", value="3\n3", height=80, key="slots")
+    keys_text = st.text_area("API Keys (mỗi dòng 1 key)", height=120)
+    slots_text = st.text_area("Slots (số worker mỗi key)", value="3\n3", height=80)
 
 with right:
     st.subheader("🚀 Điều Khiển")
-    run_btn = st.button("▶ Bắt Đầu Dịch Nhiều File", type="primary", use_container_width=True, key="run_button")
+    run_btn = st.button("▶ Bắt Đầu Dịch Nhiều File", type="primary", use_container_width=True, key="run_btn")
 
-    if st.session_state.get("run_logs"):
+    if st.session_state.run_logs:
         st.code("\n".join(st.session_state.run_logs[-15:]), language=None)
 
 # =========================
@@ -158,18 +158,19 @@ if run_btn:
     elif not keys_text.strip():
         st.error("Vui lòng nhập ít nhất 1 API Key")
     else:
-        st.info("Đang bắt đầu dịch... (Mặc định sang Tiếng Bồ Đào Nha)")
-        
-        # TODO: Thêm logic dịch đầy đủ ở đây
-        # Hiện tại chỉ hiển thị thông báo để test nút có hoạt động không
-        st.success("Nút đã hoạt động! Đang dịch sang Tiếng Bồ Đào Nha...")
-        
-        # Phần tạo ZIP kết quả (bạn có thể bổ sung sau)
-        st.download_button(
-            label="📥 Tải file kết quả (Demo)",
-            data=b"Test file - Dịch sang Tiếng Bồ Đào Nha",
-            file_name="translated_pt.srt",
-            mime="text/plain"
-        )
+        with st.spinner(f"Đang dịch sang {target_language}..."):
+            # Demo - Sau này bạn thay bằng logic dịch thật
+            st.success(f"✅ Đã bắt đầu dịch sang **{target_language}**")
+            
+            # Tạo file demo để test download
+            demo_content = f"Dịch sang {target_language} - Hoàn thành (demo)\n\n".encode("utf-8")
+            
+            st.download_button(
+                label="📥 Tải file kết quả",
+                data=demo_content,
+                file_name="translated.srt",
+                mime="text/plain",
+                use_container_width=True
+            )
 
-st.caption("Phiên bản tối ưu cho Streamlit Cloud - Mặc định dịch sang Tiếng Bồ Đào Nha")
+st.caption("Phiên bản đã fix lỗi SyntaxError cho Streamlit Cloud")
