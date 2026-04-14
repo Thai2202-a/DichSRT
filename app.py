@@ -13,7 +13,7 @@ from google.genai import types
 # CẤU HÌNH
 # =========================
 st.set_page_config(
-    page_title="Đình Thái - SRT Portuguese Translator",
+    page_title="Đình Thái - SRT Portuguese Studio",
     page_icon="🎬",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -25,9 +25,8 @@ MAX_RETRIES_PER_KEY = 2
 RETRY_SLEEP_SECONDS = 0.35
 MAX_PARALLEL_BATCHES = 4
 
-# SỬA PROMPT HỆ THỐNG SANG TIẾNG BỒ ĐÀO NHA
 BASE_SYSTEM_PROMPT = """
-Você é um tradutor especialista em legendas de filmes para o idioma Português (Brasil).
+Você é um especialista em tradução de legendas de filmes para o idioma Português.
 YÊU CẦU CHUNG:
 Dịch tự nhiên, mượt, đúng ngữ cảnh hội thoại sang tiếng Bồ Đào Nha.
 Giữ văn phong giống phụ đề phim, dễ đọc, gọn.
@@ -36,12 +35,12 @@ Không bỏ dòng nào.
 Không đánh số lại.
 Mỗi mục phụ đề đầu vào phải trả về đúng 1 dòng đầu ra tương ứng.
 Nếu gặp tên riêng thì xử lý hợp lý theo ngữ cảnh.
-Nếu dòng đã là tiếng Bồ Đào Nha chuẩn thì giữ nguyên.
+Nếu dòng đã là tiếng Bồ Đào Nha chuẩn thì giữ nguyên hoặc chỉnh nhẹ cho tự nhiên hơn.
 Không thêm ký tự thừa. """.strip()
 
 SOURCE_LANGUAGE_OPTIONS = [
     "Tự động",
-    "Tiếng Việt", # Thêm tiếng Việt vào nguồn
+    "Tiếng Việt",
     "Tiếng Trung",
     "Tiếng Anh",
     "Tiếng Nhật",
@@ -72,9 +71,13 @@ LANGUAGE_LABELS = {
 
 CUSTOM_CSS = """
 <style>
-    /* Giữ nguyên CSS của bạn */
     .stApp { background-color: #0e1117; color: #e0e0e0; }
-    .stButton>button { width: 100%; border-radius: 5px; }
+    .status-box { padding: 20px; border-radius: 10px; background: #1e2130; border: 1px solid #3e445e; margin-bottom: 20px; }
+    .key-green { color: #00ff00; }
+    .key-red { color: #ff4b4b; }
+    .key-yellow { color: #ffff00; }
+    .stButton>button { width: 100%; border-radius: 5px; height: 3em; }
+    .title-text { font-size: 2.2rem; font-weight: 800; color: #ffffff; margin-bottom: 0.5rem; }
 </style>
 """
 
@@ -86,7 +89,7 @@ class SubtitleItem:
     translated_text: str = ""
 
 # =========================
-# XỬ LÝ SRT (GIỮ NGUYÊN)
+# XỬ LÝ SRT
 # =========================
 def read_srt_content(content: str) -> List[SubtitleItem]:
     content = content.strip()
@@ -114,10 +117,9 @@ def write_srt_content(items: List[SubtitleItem]) -> str:
 def detect_language(text: str) -> str:
     sample = (text or "").strip()
     if not sample: return "unknown"
-    if re.search(r"[À-ỹà-ỹĂăÂâĐđÊêÔôƠơƯư]", sample): return "vi" # Nhận diện tiếng Việt
+    if re.search(r"[À-ỹà-ỹĂăÂâĐđÊêÔôƠơƯư]", sample): return "vi"
     if re.search(r"[\u4e00-\u9fff]", sample): return "zh"
     if re.search(r"[\u3040-\u309f\u30a0-\u30ff]", sample): return "ja"
-    if re.search(r"[\uac00-\ud7af]", sample): return "ko"
     latin_letters = re.findall(r"[A-Za-z]", sample)
     if latin_letters:
         lower = sample.lower()
@@ -156,9 +158,9 @@ def merge_partial_translation(source_items: List[SubtitleItem], partial_items: L
     merged = 0
     limit = min(len(source_items), len(partial_items))
     for i in range(limit):
-        partial_text = partial_items[i].text.strip()
-        if partial_text:
-            source_items[i].translated_text = partial_text
+        p_text = partial_items[i].text.strip()
+        if p_text:
+            source_items[i].translated_text = p_text
             merged += 1
     return source_items, merged
 
@@ -167,7 +169,7 @@ def build_batches(items: List[SubtitleItem], batch_size: int) -> List[List[Subti
     return [pending[i:i + batch_size] for i in range(0, len(pending), batch_size)]
 
 # =========================
-# API KEY / GEMINI (GIỮ NGUYÊN)
+# API KEY / GEMINI
 # =========================
 def create_client(api_key: str):
     return genai.Client(api_key=api_key.strip())
@@ -181,46 +183,34 @@ def test_single_api_key(api_key: str, model_name: str = DEFAULT_MODEL) -> Dict[s
     try:
         client = create_client(api_key)
         response = client.models.generate_content(
-            model=model_name,
-            contents="Chỉ trả lời đúng từ OK",
+            model=model_name, contents="Respond with OK",
             config=types.GenerateContentConfig(temperature=0),
         )
         if response.text:
             return {"key": api_key, "ok": True, "status": "KEY OK", "color": "green", "detail": "Dùng được."}
-        return {"key": api_key, "ok": False, "status": "LỖI", "color": "red", "detail": "Không phản hồi."}
+        return {"key": api_key, "ok": False, "status": "LỖI", "color": "red", "detail": "Rỗng."}
     except Exception as e:
         return {"key": api_key, "ok": False, "status": "LỖI", "color": "red", "detail": str(e)}
 
 def test_all_api_keys(api_keys: List[str], model_name: str) -> List[Dict[str, Any]]:
     return [test_single_api_key(key, model_name) for key in api_keys]
 
-# =========================
-# SỬA LOGIC BUILD PROMPT SANG TIẾNG BỒ
-# =========================
 def build_prompt(batch: List[SubtitleItem], style_prompt: str, source_language: str) -> str:
-    rows = []
-    for i, item in enumerate(batch, start=1):
-        rows.append(f"[{i}] {item.text.replace(chr(13), '').strip()}")
+    rows = [f"[{i}] {item.text.replace(chr(13), '').strip()}" for i, item in enumerate(batch, start=1)]
     joined_rows = "\n".join(rows)
     extra = f"\nREQUISITO DE ESTILO:\n{style_prompt.strip()}\n" if style_prompt.strip() else ""
+    lang_instr = f"- Idioma de origem: {source_language}.\n" if source_language != "Tự động" else "- Detectar idioma automaticamente.\n"
     
-    if source_language == "Tự động":
-        lang_instruction = "- Detectar o idioma original de cada linha automaticamente.\n"
-    else:
-        lang_instruction = f"- O idioma de origem é {source_language}.\n"
-
     prompt = (
-        f"{BASE_SYSTEM_PROMPT}\n"
-        f"{extra}\n"
-        "MISSÃO:\n"
-        f"{lang_instruction}"
-        "- Traduzir tudo para o PORTUGUÊS (BR).\n"
-        "- Se uma linha já estiver em Português, mantenha-a.\n\n"
+        f"{BASE_SYSTEM_PROMPT}\n{extra}\n"
+        "TAREFA:\n"
+        f"{lang_instr}"
+        "- Traduzir TUDO para o PORTUGUÊS.\n"
+        "- Se a linha já estiver em Português, mantenha-a.\n\n"
         "FORMATO DE RETORNO:\n"
-        "- Cada item deve retornar exatamente 1 linha:\n"
-        "[número] tradução\n"
+        "- [número] tradução\n"
         "- Sem explicações.\n\n"
-        "LISTA:\n"
+        "DANH SÁCH:\n"
         f"{joined_rows}"
     )
     return prompt.strip()
@@ -228,62 +218,53 @@ def build_prompt(batch: List[SubtitleItem], style_prompt: str, source_language: 
 def parse_translated_response(batch: List[SubtitleItem], response_text: str) -> List[str]:
     mapping: Dict[int, str] = {}
     for line in response_text.splitlines():
-        line = line.strip()
-        match = re.match(r"^\[(\d+)\]\s*(.*)$", line) # Sửa regex cho khớp [số] bản dịch
-        if match:
-            mapping[int(match.group(1))] = match.group(2).strip()
+        match = re.match(r"^\[(\d+)\]\s*(.*)$", line.strip())
+        if match: mapping[int(match.group(1))] = match.group(2).strip()
     results = []
     for i in range(1, len(batch) + 1):
         txt = mapping.get(i, "").strip()
-        if not txt: txt = batch[i - 1].text
-        results.append(txt)
+        results.append(txt if txt else batch[i - 1].text)
     return results
 
-# ... (Các hàm try_translate_batch_with_key, translate_batch_with_failover, collect_api_keys_and_slots giữ nguyên)
 def try_translate_batch_with_key(api_key, model_name, batch, style_prompt, source_language):
     client = create_client(api_key)
     prompt = build_prompt(batch, style_prompt, source_language)
-    last_error = None
     for _ in range(MAX_RETRIES_PER_KEY):
         try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=prompt,
+            resp = client.models.generate_content(
+                model=model_name, contents=prompt,
                 config=types.GenerateContentConfig(temperature=0.2),
             )
-            text = (response.text or "").strip()
-            if not text: raise RuntimeError("Rỗng")
+            text = (resp.text or "").strip()
+            if not text: raise RuntimeError("Model rỗng")
             return parse_translated_response(batch, text)
-        except Exception as e:
-            last_error = e
-            time.sleep(RETRY_SLEEP_SECONDS)
-    raise RuntimeError(str(last_error))
+        except: time.sleep(RETRY_SLEEP_SECONDS)
+    raise RuntimeError("Failed")
 
 def translate_batch_with_failover(batch_id, batch, worker_slots, model_name, style_prompt, source_language):
     for api_key in worker_slots:
         try:
-            translated = try_translate_batch_with_key(api_key, model_name, batch, style_prompt, source_language)
-            return batch_id, True, translated, ""
+            trans = try_translate_batch_with_key(api_key, model_name, batch, style_prompt, source_language)
+            return batch_id, True, trans, ""
         except: continue
-    return batch_id, False, [item.text for item in batch], "All keys failed"
+    return batch_id, False, [item.text for item in batch], "Error"
 
 def collect_api_keys_and_slots(keys_raw: str, batches_raw: str) -> Tuple[List[str], List[str]]:
-    api_keys = [line.strip() for line in keys_raw.splitlines() if line.strip()]
-    batch_values = [line.strip() for line in batches_raw.splitlines()]
-    worker_slots = []
-    for idx, key in enumerate(api_keys):
-        count = 1
+    api_keys = [k.strip() for k in keys_raw.splitlines() if k.strip()]
+    batch_vals = [b.strip() for b in batches_raw.splitlines()]
+    slots = []
+    for i, k in enumerate(api_keys):
+        c = 1
         try:
-            if idx < len(batch_values): count = int(batch_values[idx])
-        except: count = 1
-        for _ in range(max(1, count)): worker_slots.append(key)
-    return api_keys, worker_slots
+            if i < len(batch_vals): c = int(batch_vals[i])
+        except: c = 1
+        for _ in range(max(1, c)): slots.append(k)
+    return api_keys, slots
 
 # =========================
-# XỬ LÝ FILE (GIỮ NGUYÊN GIAO DIỆN)
+# XỬ LÝ FILE - TĂNG TỐC
 # =========================
 def process_one_file(file_name, source_bytes, partial_bytes, worker_slots, model_name, style_prompt, batch_size, source_language, progress_callback=None):
-    # Logic xử lý y hệt file cũ của bạn
     try:
         source_text = source_bytes.decode("utf-8-sig")
     except:
@@ -292,12 +273,17 @@ def process_one_file(file_name, source_bytes, partial_bytes, worker_slots, model
     source_items = read_srt_content(source_text)
     if not source_items: return {"file_name": file_name, "success": False, "error": "Rỗng", "output_bytes": b"", "stats": {"total":0,"skip":0,"need":0,"done":0,"failed_batches":0,"speed":0.0}, "logs": [], "detected_lang": ""}
 
-    detected_lang = detect_dominant_language(source_items)
+    det_lang = detect_dominant_language(source_items)
     source_items, skipped = prepare_items_from_source(source_items)
     
+    resumed = 0
+    if partial_bytes:
+        p_text = partial_bytes.decode("utf-8", errors="ignore")
+        source_items, resumed = merge_partial_translation(source_items, read_srt_content(p_text))
+
     batches = build_batches(source_items, batch_size)
     total_need = sum(len(b) for b in batches)
-    logs = [f"🌐 {file_name} | Orig: {LANGUAGE_LABELS.get(detected_lang, detected_lang)}"]
+    logs = [f"🌐 {file_name} | Phát hiện: {LANGUAGE_LABELS.get(det_lang, det_lang)}"]
     
     done_lines = 0
     start_time = time.time()
@@ -309,26 +295,98 @@ def process_one_file(file_name, source_bytes, partial_bytes, worker_slots, model
             _, ok, trans, _ = future.result()
             for item, t in zip(b, trans): item.translated_text = t
             done_lines += len(b)
-            if progress_callback: progress_callback("batch_done", file_name, bid, len(batches), [t[:50] for t in trans])
+            if progress_callback: progress_callback("batch_done", file_name, bid, len(batches), [t[:80] for t in trans])
 
     return {
         "file_name": file_name, "success": True, "error": "",
         "output_bytes": write_srt_content(source_items).encode("utf-8"),
-        "stats": {"total": len(source_items), "skip": skipped, "need": total_need, "done": done_lines, "failed_batches": 0, "speed": 0.0},
-        "logs": logs, "detected_lang": LANGUAGE_LABELS.get(detected_lang, detected_lang)
+        "stats": {"total": len(source_items), "skip": skipped+resumed, "need": total_need, "done": done_lines, "failed_batches": 0, "speed": done_lines/(time.time()-start_time)},
+        "logs": logs, "detected_lang": LANGUAGE_LABELS.get(det_lang, det_lang)
     }
 
+def build_partial_map(partial_upload) -> Dict[str, bytes]:
+    res = {}
+    if not partial_upload: return res
+    if partial_upload.name.lower().endswith(".zip"):
+        with zipfile.ZipFile(io.BytesIO(partial_upload.read())) as zf:
+            for n in zf.namelist():
+                if n.lower().endswith(".srt"): res[n.split("/")[-1]] = zf.read(n)
+    else: res[partial_upload.name] = partial_upload.read()
+    return res
+
 # =========================
-# UI STREAMLIT (GIỮ NGUYÊN GIAO DIỆN CỦA BẠN)
+# SESSION STATE & UI
 # =========================
+def init_state():
+    for k, v in {"zip_bytes": b"", "result_ready": False, "run_logs": [], "api_test_results": [], "stats": {"files": 0, "total": 0, "skip": 0, "need": 0, "done": 0, "failed_batches": 0}, "speed_text": "0 dòng/s"}.items():
+        if k not in st.session_state: st.session_state[k] = v
+
+init_state()
 st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
-st.title("🎬 Đình Thái - SRT Portuguese Studio")
+st.markdown('<div class="title-text">🎬 Đình Thái - SRT Portuguese Studio</div>', unsafe_allow_html=True)
 
-# ... (Phần UI: left, right columns, button, file_uploader giữ y nguyên như file bạn gửi)
-# Tôi sẽ bỏ qua phần code UI lặp lại để tập trung vào các nút bấm quan trọng.
+left, right = st.columns([1.2, 1.5], gap="large")
 
-# Ví dụ thay đổi giá trị mặc định của Prompt Style trong UI:
-# style_prompt = st.text_area("Prompt", value="Dịch tự nhiên sang tiếng Bồ Đào Nha (Brazillian Portuguese). Xưng hô phù hợp phim.")
+with left:
+    st.markdown('### 📤 Upload Files')
+    uploaded_files = st.file_uploader("Chọn file .srt", type=["srt"], accept_multiple_files=True)
+    partial_zip = st.file_uploader("File dịch dở (ZIP/SRT)", type=["zip", "srt"])
+    
+    st.markdown('### ⚙️ Cấu Hình')
+    c1, c2, c3 = st.columns(3)
+    model_name = c1.selectbox("MODEL", ["gemini-2.0-flash", "gemini-1.5-flash"])
+    batch_size = c2.number_input("BATCH", 1, 200, DEFAULT_BATCH_SIZE)
+    source_language = c3.selectbox("NGUỒN", SOURCE_LANGUAGE_OPTIONS)
+    
+    style_prompt = st.text_area("Prompt Style", "Dịch tự nhiên sang tiếng Bồ Đào Nha (PT-BR). Ưu tiên câu ngắn, dễ đọc.", height=100)
+    
+    st.markdown('### 🔑 API Keys')
+    keys_text = st.text_area("Keys", placeholder="AIza...", height=120)
+    batch_text = st.text_area("Slots", value="3", height=60)
+    
+    if st.button("🧪 Test Keys"):
+        raw_keys = [k.strip() for k in keys_text.splitlines() if k.strip()]
+        st.session_state["api_test_results"] = test_all_api_keys(raw_keys, model_name)
 
-# Chú ý quan trọng: Trong phần RUN của bạn, hãy đảm bảo gọi hàm process_one_file 
-# với các tham số đã được cấu hình dịch sang tiếng Bồ như trên.
+with right:
+    st.markdown('### 🚀 Điều Khiển')
+    run_btn = st.button("▶ Bắt Đầu Dịch", type="primary")
+    
+    stats = st.session_state["stats"]
+    g1, g2, g3 = st.columns(3)
+    g1.metric("Số file", stats["files"])
+    g2.metric("Tổng dòng", stats["total"])
+    g3.metric("Tốc độ", st.session_state["speed_text"])
+    
+    st.markdown('### 🖥 Logs')
+    log_placeholder = st.empty()
+    if st.session_state["run_logs"]: log_placeholder.code("\n".join(st.session_state["run_logs"][-10:]))
+
+    if run_btn and uploaded_files and keys_text:
+        api_keys, slots = collect_api_keys_and_slots(keys_text, batch_text)
+        partial_map = build_partial_map(partial_zip)
+        
+        start_t = time.time()
+        results = []
+        for i, f in enumerate(uploaded_files):
+            res = process_one_file(f.name, f.read(), partial_map.get(f.name), slots, model_name, style_prompt, batch_size, source_language)
+            results.append(res)
+            
+            # Cập nhật UI
+            st.session_state["stats"]["files"] = len(uploaded_files)
+            st.session_state["stats"]["total"] += res["stats"]["total"]
+            st.session_state["stats"]["done"] += res["stats"]["done"]
+            st.session_state["speed_text"] = f"{st.session_state['stats']['done']/(time.time()-start_t):.1f} d/s"
+            st.session_state["run_logs"].extend(res["logs"])
+            log_placeholder.code("\n".join(st.session_state["run_logs"][-10:]))
+
+        # Tạo ZIP
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, "w") as zf:
+            for r in results:
+                if r["output_bytes"]: zf.writestr(r["file_name"], r["output_bytes"])
+        st.session_state["zip_bytes"] = zip_buffer.getvalue()
+        st.session_state["result_ready"] = True
+
+    if st.session_state["result_ready"]:
+        st.download_button("📥 Tải ZIP kết quả", st.session_state["zip_bytes"], "portuguese_translated.zip", "application/zip", use_container_width=True)
