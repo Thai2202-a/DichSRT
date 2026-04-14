@@ -333,7 +333,7 @@ def create_client(api_key: str):
     return genai.Client(api_key=api_key.strip())
 
 
-def build_prompt(batch: List[SubtitleItem], style_prompt: str, target_lang: str) -> str:
+def build_prompt(batch: List[SubtitleItem], style_prompt: str) -> str:
     rows = []
     for i, item in enumerate(batch, start=1):
         clean_text = item.text.replace("\r", "").strip()
@@ -342,11 +342,8 @@ def build_prompt(batch: List[SubtitleItem], style_prompt: str, target_lang: str)
     extra = ""
     if style_prompt.strip():
         extra = f"\nYÊU CẦU PHONG CÁCH DỊCH RIÊNG:\n{style_prompt.strip()}\n"
-        
-    dynamic_system_prompt = BASE_SYSTEM_PROMPT.replace("tiếng Việt", target_lang)
-    
     prompt = (
-        f"{dynamic_system_prompt}\n"
+        f"{BASE_SYSTEM_PROMPT}\n"
         f"{extra}\n"
         "Hãy dịch danh sách phụ đề sau.\n"
         "Mỗi mục phải trả về đúng 1 dòng theo định dạng:\n"
@@ -374,9 +371,9 @@ def parse_translated_response(batch: List[SubtitleItem], response_text: str) -> 
     return results
 
 
-def try_translate_batch_with_key(api_key: str, model_name: str, batch: List[SubtitleItem], style_prompt: str, target_lang: str) -> List[str]:
+def try_translate_batch_with_key(api_key: str, model_name: str, batch: List[SubtitleItem], style_prompt: str) -> List[str]:
     client = create_client(api_key)
-    prompt = build_prompt(batch, style_prompt, target_lang)
+    prompt = build_prompt(batch, style_prompt)
     last_error = None
     for _ in range(MAX_RETRIES_PER_KEY):
         try:
@@ -395,11 +392,11 @@ def try_translate_batch_with_key(api_key: str, model_name: str, batch: List[Subt
     raise RuntimeError(str(last_error) if last_error else "Unknown error")
 
 
-def translate_batch_with_failover(batch_id: int, batch: List[SubtitleItem], worker_slots: List[str], model_name: str, style_prompt: str, target_lang: str):
+def translate_batch_with_failover(batch_id: int, batch: List[SubtitleItem], worker_slots: List[str], model_name: str, style_prompt: str):
     last_error = ""
     for api_key in worker_slots:
         try:
-            translated = try_translate_batch_with_key(api_key, model_name, batch, style_prompt, target_lang)
+            translated = try_translate_batch_with_key(api_key, model_name, batch, style_prompt)
             return batch_id, True, translated, ""
         except Exception as e:
             last_error = str(e)
@@ -472,8 +469,15 @@ with left:
         model_name = st.selectbox("MODEL", options=["gemini-2.5-flash", "gemini-2.0-flash"], index=0)
     with cfg2:
         batch_size = st.number_input("BATCH SIZE", min_value=1, max_value=200, value=DEFAULT_BATCH_SIZE, step=1)
-        
-    target_lang = st.selectbox("NGÔN NGỮ ĐÍCH", options=["tiếng Việt", "tiếng Bồ Đào Nha"], index=0)
+    
+    # ==================== PHẦN NGÔN NGỮ ĐÍCH ĐÃ THÊM ====================
+    target_language = st.selectbox(
+        "NGÔN NGỮ ĐÍCH",
+        options=["Tiếng Việt", "Tiếng Bồ Đào Nha (Português)"],
+        index=0
+    )
+    # ==================================================================
+
     output_name = st.text_input("TÊN FILE XUẤT", value="output_vi.srt")
     st.markdown('</div>', unsafe_allow_html=True)
 
@@ -639,7 +643,6 @@ if run_btn:
                                     worker_slots,
                                     model_name,
                                     style_prompt,
-                                    target_lang
                                 )
                             )
                         completed = 0
